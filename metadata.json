@@ -1,0 +1,7 @@
+{
+  "name": "Système Intégré DDL-PN - République du Congo",
+  "description": "Système officiel de rédaction juridique, d'instruction des actes, de suivi du PTA 2026 et référentiel réglementaire de la Direction Départementale des Loisirs de Pointe-Noire (MCAPNIT).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

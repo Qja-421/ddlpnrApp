@@ -1,0 +1,125 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #022448;
+  --color-primary-container: #1e3a5f;
+  --color-on-primary: #ffffff;
+  --color-on-primary-container: #8aa4cf;
+  --color-primary-fixed: #d5e3ff;
+  --color-primary-fixed-dim: #adc8f5;
+  --color-on-primary-fixed: #001c3b;
+  --color-on-primary-fixed-variant: #2d486d;
+
+  --color-secondary: #006d2f;
+  --color-secondary-container: #80f899;
+  --color-secondary-fixed: #83fb9c;
+  --color-secondary-fixed-dim: #66de82;
+  --color-on-secondary: #ffffff;
+  --color-on-secondary-container: #007232;
+  --color-on-secondary-fixed: #002109;
+  --color-on-secondary-fixed-variant: #005322;
+
+  --color-tertiary: #6d5e00;
+  --color-tertiary-container: #c4aa0f;
+  --color-tertiary-fixed: #ffe251;
+  --color-tertiary-fixed-dim: #e2c633;
+  --color-on-tertiary: #ffffff;
+  --color-on-tertiary-container: #4a3f00;
+  --color-on-tertiary-fixed: #211b00;
+  --color-on-tertiary-fixed-variant: #524600;
+
+  --color-error: #ba1a1a;
+  --color-error-container: #ffdad6;
+  --color-on-error: #ffffff;
+  --color-on-error-container: #93000a;
+
+  --color-surface: #f9f9ff;
+  --color-surface-dim: #d4daea;
+  --color-surface-bright: #f9f9ff;
+  --color-surface-variant: #dde2f3;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #f1f3ff;
+  --color-surface-container: #e8eeff;
+  --color-surface-container-high: #e3e8f9;
+  --color-surface-container-highest: #dde2f3;
+  --color-surface-tint: #455f87;
+
+  --color-on-surface: #161c27;
+  --color-on-surface-variant: #43474e;
+  --color-background: #f9f9ff;
+  --color-on-background: #161c27;
+  --color-outline: #74777f;
+  --color-outline-variant: #c4c6cf;
+  --color-inverse-surface: #2a303d;
+  --color-inverse-on-surface: #ecf0ff;
+  --color-inverse-primary: #adc8f5;
+
+  --font-headline-xl: "EB Garamond", serif;
+  --font-headline-lg: "EB Garamond", serif;
+  --font-headline-md: "EB Garamond", serif;
+  --font-headline-sm: "EB Garamond", serif;
+  --font-title-official: "EB Garamond", serif;
+  --font-body-lg: "Source Serif 4", serif;
+  --font-body-md: "Source Serif 4", serif;
+  --font-body-sm: "Source Serif 4", serif;
+  --font-label-lg: "Public Sans", sans-serif;
+  --font-label-md: "Public Sans", sans-serif;
+  --font-label-sm: "Public Sans", sans-serif;
+}
+
+@layer base {
+  body {
+    font-family: "Public Sans", sans-serif;
+    color: var(--color-on-surface);
+    background-color: var(--color-background);
+  }
+}
+
+.font-garamond {
+  font-family: "EB Garamond", serif;
+}
+
+.font-source {
+  font-family: "Source Serif 4", serif;
+}
+
+.font-public {
+  font-family: "Public Sans", sans-serif;
+}
+
+/* Material Symbols class helper */
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
+}
+
+@media print {
+  header, footer, nav, .no-print, button, .tab-buttons {
+    display: none !important;
+  }
+  body {
+    background: white !important;
+    color: black !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .print-area {
+    box-shadow: none !important;
+    border: none !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 15mm !important;
+  }
+}
