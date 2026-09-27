@@ -15,7 +15,7 @@ import { CircuitBrazzaville } from './CircuitBrazzaville.tsx';
 import { EtatVersementTresor } from './EtatVersementTresor.tsx';
 import { CalendrierRdvTerrain, addOneYear, getFirstPaymentDate, formatISOToFR } from './CalendrierRdvTerrain.tsx';
 import { TerminalAgentMobile } from './TerminalAgentMobile.tsx';
-import { useSession } from '../lib/sessionContext.tsx';
+import { useSession, OFFICIAL_AGENTS } from '../lib/sessionContext.tsx';
 
 export type { FieldEstablishment, AgentAccount };
 
@@ -465,15 +465,15 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
     }
   }, [initialSubTab]);
 
-  const [establishments, setEstablishments] = useState<FieldEstablishment[]>(mockEstablishments);
-  const [agents, setAgents] = useState<AgentAccount[]>(mockAgents);
-  const [selectedEst, setSelectedEst] = useState<FieldEstablishment | null>(establishments[0]);
+  const [establishments, setEstablishments] = useState<FieldEstablishment[]>([]);
+  const [agents, setAgents] = useState<AgentAccount[]>(OFFICIAL_AGENTS);
+  const [selectedEst, setSelectedEst] = useState<FieldEstablishment | null>(null);
   const [filterDistrict, setFilterDistrict] = useState<string>('TOUS');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedSector, setSelectedSector] = useState<'ALL' | 'formal' | 'informal'>('ALL');
   const [adminAgentFilter, setAdminAgentFilter] = useState<string>('TOUS');
   const [reassignModalEst, setReassignModalEst] = useState<FieldEstablishment | null>(null);
-  const [targetReassignBadge, setTargetReassignBadge] = useState<string>('SAA-PN-008');
+  const [targetReassignBadge, setTargetReassignBadge] = useState<string>('DDL-PN-26-00000A-86244');
   const [isSupabaseLive, setIsSupabaseLive] = useState(false);
 
   // Pagination for scaling up to 20,000 establishments
@@ -499,8 +499,8 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
     let isMounted = true;
     const loadData = async () => {
       const [res, agentsRes] = await Promise.all([
-        apiFetchEstablishments(mockEstablishments),
-        apiFetchAgents(mockAgents),
+        apiFetchEstablishments([]),
+        apiFetchAgents(OFFICIAL_AGENTS),
       ]);
       if (isMounted) {
         setEstablishments(res.data);

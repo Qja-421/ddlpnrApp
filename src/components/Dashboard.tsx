@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { RepublicSeal, ArmoiriesCongo, LogoDDLPN } from './RepublicSeal.tsx';
 import { apiFetchEstablishments, FieldEstablishment, subscribeToSupabase } from '../lib/supabase.ts';
 import { RecoveryRateChart } from './RecoveryRateChart.tsx';
+import { useSession } from '../lib/sessionContext.tsx';
 import type { TabType } from './Navbar.tsx';
 
 export interface DashboardProps {
@@ -225,7 +226,9 @@ const districtMetrics: DistrictMetric[] = [
 ];
 
 export const Dashboard: React.FC<DashboardProps> = ({ onNavigateToTab }) => {
+  const { currentAgent, isAdmin, isFieldAgent, agentsList, canAccessEstablishment, setShowLoginModal } = useSession();
   const [period, setPeriod] = useState<'day' | 'week' | 'month' | 'year'>('month');
+  const [adminAgentFilter, setAdminAgentFilter] = useState<string>('ALL');
   const [alerts, setAlerts] = useState<MiseEnDemeureAlert[]>(initialAlerts);
   const [recentCollections] = useState<RecentCollection[]>(initialRecentCollections);
   const [activeFilterStatus, setActiveFilterStatus] = useState<'ALL' | 'EXPIRED' | 'CRITICAL' | 'URGENT'>('ALL');
@@ -257,6 +260,30 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateToTab }) => {
     };
   }, []);
 
+  // Selected agent for admin filter view
+  const selectedFilteredAgent = useMemo(() => {
+    if (adminAgentFilter === 'ALL') return null;
+    return agentsList.find((a) => a.badgeNumber === adminAgentFilter || a.id === adminAgentFilter) || null;
+  }, [adminAgentFilter, agentsList]);
+
+  // Session-scoped effective establishments
+  const effectiveEstablishments = useMemo(() => {
+    if (isAdmin) {
+      if (adminAgentFilter === 'ALL') {
+        return liveEstablishments;
+      }
+      return liveEstablishments.filter(
+        (e) =>
+          e.assignedAgentBadge === adminAgentFilter ||
+          e.assignedAgentId === adminAgentFilter ||
+          (selectedFilteredAgent &&
+            (e.assignedAgentName || '').toLowerCase().includes(selectedFilteredAgent.name.toLowerCase().split(' ')[0]))
+      );
+    }
+    // Field agent session: strict filtering to their own establishments
+    return liveEstablishments.filter((e) => canAccessEstablishment(e));
+  }, [isAdmin, adminAgentFilter, selectedFilteredAgent, liveEstablishments, canAccessEstablishment]);
+
   // Live simulation tick indicator
   const [lastRefreshTime, setLastRefreshTime] = useState<string>('À l\'instant (Synchro Supabase)');
 
@@ -265,20 +292,80 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateToTab }) => {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
+  // Dynamic District Metrics grouped from effectiveEstablishments
+  const computedDistrictMetrics = useMemo(() => {
+    if (effectiveEstablishments.length === 0) {
+      return districtMetrics;
+    }
+
+    const map = new Map<
+      string,
+      { totalIdentified: number; formalCount: number; informalCount: number; totalDue: number; collectedAmount: number }
+    >();
+
+    for (const est of effectiveEstablishments) {
+      const rawDist = est.district || 'Autre Arrondissement';
+      let clean = rawDist;
+      if (clean.includes('1') || clean.toLowerCase().includes('lumumba')) clean = 'Arr. 1 Lumumba';
+      else if (clean.includes('2') || clean.toLowerCase().includes('mvou')) clean = 'Arr. 2 Mvoumvou';
+      else if (clean.includes('3') || clean.toLowerCase().includes('tié') || clean.toLowerCase().includes('tietie')) clean = 'Arr. 3 Tié-Tié';
+      else if (clean.includes('4') || clean.toLowerCase().includes('loand') || clean.toLowerCase().includes('louand')) clean = 'Arr. 4 Loandjili';
+      else if (clean.includes('5') || clean.toLowerCase().includes('mongo')) clean = 'Arr. 5 Mongo-Mpoukou';
+      else if (clean.includes('6') || clean.toLowerCase().includes('ngoyo')) clean = 'Arr. 6 Ngoyo';
+
+      if (!map.has(clean)) {
+        map.set(clean, { totalIdentified: 0, formalCount: 0, informalCount: 0, totalDue: 0, collectedAmount: 0 });
+      }
+      const item = map.get(clean)!;
+      item.totalIdentified += 1;
+      if (est.sector === 'formal') item.formalCount += 1;
+      else item.informalCount += 1;
+      item.totalDue += (est.totalDue || 0);
+      item.collectedAmount += (est.paidAmount || 0);
+    }
+
+    return Array.from(map.entries())
+      .map(([district, data]) => ({ district, ...data }))
+      .sort((a, b) => b.totalIdentified - a.totalIdentified);
+  }, [effectiveEstablishments]);
+
+  // Dynamic Recent Collections from effectiveEstablishments or fallback
+  const displayedRecentCollections = useMemo(() => {
+    const paidEsts = effectiveEstablishments.filter((e) => (e.paidAmount || 0) > 0);
+    if (paidEsts.length > 0) {
+      return paidEsts.slice(0, 6).map((est, idx) => ({
+        id: `col-${est.id}`,
+        receiptRef: `REC-DDL-PN-2026-${String(180 + idx).padStart(4, '0')}`,
+        establishmentName: est.name,
+        promoter: est.promoter,
+        amount: est.paidAmount,
+        location: (idx % 2 === 0 ? 'TERRAIN' : 'DIRECTION') as 'TERRAIN' | 'DIRECTION',
+        collectedBy: est.assignedAgentName || currentAgent.name,
+        timestamp: est.nextDueDate ? `Tournée du ${est.nextDueDate}` : (est.identifiedDate || 'Récemment enregistré'),
+        nextDueDate: est.paidAmount >= est.totalDue ? 'Soldé Annuel' : (est.nextDueDate || 'Prochaine tournée'),
+      }));
+    }
+    return recentCollections.filter((c) => {
+      if (isAdmin && adminAgentFilter === 'ALL') return true;
+      const targetAgent = isAdmin ? selectedFilteredAgent : currentAgent;
+      return targetAgent ? c.collectedBy.toLowerCase().includes(targetAgent.name.toLowerCase().split(' ')[0]) : true;
+    });
+  }, [effectiveEstablishments, recentCollections, isAdmin, adminAgentFilter, selectedFilteredAgent, currentAgent]);
+
   // KPI Calculations
   const stats = useMemo(() => {
-    let totalIdentified = districtMetrics.reduce((acc, d) => acc + d.totalIdentified, 0);
-    let totalFormal = districtMetrics.reduce((acc, d) => acc + d.formalCount, 0);
-    let totalInformal = districtMetrics.reduce((acc, d) => acc + d.informalCount, 0);
-    let totalLiquidated = districtMetrics.reduce((acc, d) => acc + d.totalDue, 0);
-    let totalCollected = districtMetrics.reduce((acc, d) => acc + d.collectedAmount, 0);
+    let totalIdentified = computedDistrictMetrics.reduce((acc, d) => acc + d.totalIdentified, 0);
+    let totalFormal = computedDistrictMetrics.reduce((acc, d) => acc + d.formalCount, 0);
+    let totalInformal = computedDistrictMetrics.reduce((acc, d) => acc + d.informalCount, 0);
+    let totalLiquidated = computedDistrictMetrics.reduce((acc, d) => acc + d.totalDue, 0);
+    let totalCollected = computedDistrictMetrics.reduce((acc, d) => acc + d.collectedAmount, 0);
 
-    if (liveEstablishments.length > 0) {
-      totalIdentified = liveEstablishments.length;
-      totalFormal = liveEstablishments.filter((e) => e.sector === 'formal').length;
-      totalInformal = liveEstablishments.filter((e) => e.sector === 'informal').length;
-      const liveCollected = liveEstablishments.reduce((sum, e) => sum + (e.paidAmount || 0), 0);
-      const liveDue = liveEstablishments.reduce((sum, e) => sum + (e.totalDue || 0), 0);
+    if (effectiveEstablishments.length > 0) {
+      totalIdentified = effectiveEstablishments.length;
+      totalFormal = effectiveEstablishments.filter((e) => e.sector === 'formal').length;
+      totalInformal = effectiveEstablishments.filter((e) => e.sector === 'informal').length;
+      const liveCollected = effectiveEstablishments.reduce((sum, e) => sum + (e.paidAmount || 0), 0);
+      const liveDue = effectiveEstablishments.reduce((sum, e) => sum + (e.totalDue || 0), 0);
       if (liveCollected > 0) totalCollected = liveCollected;
       if (liveDue > 0) totalLiquidated = liveDue;
     }
@@ -286,13 +373,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateToTab }) => {
     const remainingToCollect = Math.max(0, totalLiquidated - totalCollected);
     const recoveryRate = totalLiquidated > 0 ? Math.round((totalCollected / totalLiquidated) * 100) : 0;
 
-    const expiredCount = alerts.filter((a) => a.status === 'EXPIRED').length;
-    const criticalCount = alerts.filter((a) => a.status === 'CRITICAL_24H').length;
-    const urgentCount = alerts.filter((a) => a.status === 'URGENT_72H').length;
-    const totalActiveAlerts = alerts.length;
+    const effectiveEstIds = new Set(effectiveEstablishments.map((e) => e.id));
+    const effectiveAlerts = alerts.filter((a) => {
+      if (isAdmin && adminAgentFilter === 'ALL') return true;
+      if (effectiveEstIds.has(a.establishmentId)) return true;
+      const targetAgent = isAdmin ? selectedFilteredAgent : currentAgent;
+      if (targetAgent && a.agentName?.toLowerCase().includes(targetAgent.name.toLowerCase().split(' ')[0])) {
+        return true;
+      }
+      return false;
+    });
+
+    const expiredCount = effectiveAlerts.filter((a) => a.status === 'EXPIRED').length;
+    const criticalCount = effectiveAlerts.filter((a) => a.status === 'CRITICAL_24H').length;
+    const urgentCount = effectiveAlerts.filter((a) => a.status === 'URGENT_72H').length;
+    const totalActiveAlerts = effectiveAlerts.length;
 
     // Field vs Direction collection split
-    const fieldCollected = Math.round(totalCollected * 0.64);
+    const fieldCollected = Math.round(totalCollected * 0.68);
     const directionCollected = totalCollected - fieldCollected;
 
     return {
@@ -310,16 +408,30 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateToTab }) => {
       fieldCollected,
       directionCollected,
     };
-  }, [alerts, liveEstablishments]);
+  }, [alerts, effectiveEstablishments, computedDistrictMetrics, isAdmin, adminAgentFilter, selectedFilteredAgent, currentAgent]);
 
-  // Filtered alerts
-  const filteredAlerts = alerts.filter((item) => {
-    if (activeFilterStatus === 'ALL') return true;
-    if (activeFilterStatus === 'EXPIRED') return item.status === 'EXPIRED';
-    if (activeFilterStatus === 'CRITICAL') return item.status === 'CRITICAL_24H';
-    if (activeFilterStatus === 'URGENT') return item.status === 'URGENT_72H';
-    return true;
-  });
+  // Filtered alerts for the table
+  const filteredAlerts = useMemo(() => {
+    const effectiveEstIds = new Set(effectiveEstablishments.map((e) => e.id));
+    const targetAgent = isAdmin && adminAgentFilter !== 'ALL' ? selectedFilteredAgent : currentAgent;
+
+    const baseAlerts = alerts.filter((item) => {
+      if (isAdmin && adminAgentFilter === 'ALL') return true;
+      if (effectiveEstIds.has(item.establishmentId)) return true;
+      if (targetAgent && item.agentName?.toLowerCase().includes(targetAgent.name.toLowerCase().split(' ')[0])) {
+        return true;
+      }
+      return false;
+    });
+
+    return baseAlerts.filter((item) => {
+      if (activeFilterStatus === 'ALL') return true;
+      if (activeFilterStatus === 'EXPIRED') return item.status === 'EXPIRED';
+      if (activeFilterStatus === 'CRITICAL') return item.status === 'CRITICAL_24H';
+      if (activeFilterStatus === 'URGENT') return item.status === 'URGENT_72H';
+      return true;
+    });
+  }, [alerts, effectiveEstablishments, activeFilterStatus, isAdmin, adminAgentFilter, selectedFilteredAgent, currentAgent]);
 
   // Action: Pronounce closure
   const handleConfirmClosure = (alert: MiseEnDemeureAlert) => {
@@ -486,6 +598,131 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateToTab }) => {
         </div>
       </div>
 
+      {/* SESSION SCOPE & FILTERING BANNER */}
+      <div
+        className={`rounded-2xl border p-4 sm:p-5 shadow-sm transition-all ${
+          isAdmin
+            ? 'bg-gradient-to-r from-[#f8faff] via-white to-[#f0f9ff] border-[#c7d2fe]'
+            : 'bg-gradient-to-r from-[#f0fdf4] via-white to-[#f7fee7] border-[#86efac]'
+        }`}
+      >
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-start sm:items-center gap-3.5">
+            <div
+              className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-sm ${
+                isAdmin ? 'bg-[#022448] text-[#a5b4fc]' : 'bg-[#006d2f] text-[#86efac]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[26px]">
+                {isAdmin ? 'admin_panel_settings' : 'badge'}
+              </span>
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className={`text-[10px] font-sans uppercase font-bold tracking-wider px-2 py-0.5 rounded ${
+                    isAdmin ? 'bg-[#e0e7ff] text-[#3730a3]' : 'bg-[#dcfce7] text-[#166534]'
+                  }`}
+                >
+                  {isAdmin ? '👑 Direction / Supervision Départementale' : '👤 Session Agent de Terrain (SAA)'}
+                </span>
+                <span className="text-[11px] font-sans font-semibold text-[#64748b]">
+                  {isAdmin
+                    ? adminAgentFilter === 'ALL'
+                      ? `Vue globale consolidée : 100% du département (${liveEstablishments.length} dossiers)`
+                      : `Portefeuille filtré : ${selectedFilteredAgent?.name || 'Agent sélectionné'}`
+                    : `Matricule : ${currentAgent.badgeNumber} • ${currentAgent.zone || 'Pointe-Noire'}`}
+                </span>
+              </div>
+              <h3 className="font-garamond text-lg sm:text-xl font-bold text-[#0f172a] mt-0.5">
+                {isAdmin ? (
+                  adminAgentFilter === 'ALL' ? (
+                    'Statistiques Agrégées Globales — Ensemble de la Direction (Pointe-Noire)'
+                  ) : (
+                    <span>
+                      Indicateurs Spécifiques de l'Agent :{' '}
+                      <strong className="text-[#022448]">{selectedFilteredAgent?.name}</strong>
+                    </span>
+                  )
+                ) : (
+                  <span>
+                    Portefeuille Personnel :{' '}
+                    <strong className="text-[#006d2f]">{currentAgent.name}</strong>
+                  </span>
+                )}
+              </h3>
+              <p className="text-xs text-[#475569] font-sans mt-0.5">
+                {isAdmin ? (
+                  adminAgentFilter === 'ALL' ? (
+                    'Supervision complète de tous les arrondissements. Vous pouvez isoler le bilan d\'un agent précis via le sélecteur ci-contre.'
+                  ) : (
+                    `Affichage restreint aux ${effectiveEstablishments.length} établissement(s) sous la responsabilité directe de cet agent.`
+                  )
+                ) : (
+                  <span>
+                    🔒 <strong>Cloisonnement actif :</strong> Vos indicateurs, recettes et alertes sont strictement isolés de vos collègues ({effectiveEstablishments.length} établissement(s) assigné(s)).
+                  </span>
+                )}
+              </p>
+            </div>
+          </div>
+
+          {/* Admin Agent Filter Dropdown & Switcher */}
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            {isAdmin ? (
+              <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg border border-[#c7d2fe] shadow-2xs">
+                <span className="material-symbols-outlined text-[18px] text-[#4338ca]">filter_alt</span>
+                <div className="text-left">
+                  <label
+                    htmlFor="agent-filter-select"
+                    className="block text-[9px] uppercase font-bold text-[#6366f1] leading-none mb-0.5"
+                  >
+                    Filtrer par Agent SAA :
+                  </label>
+                  <select
+                    id="agent-filter-select"
+                    value={adminAgentFilter}
+                    onChange={(e) => setAdminAgentFilter(e.target.value)}
+                    className="text-xs font-bold text-[#0f172a] bg-transparent border-none outline-none cursor-pointer pr-4"
+                  >
+                    <option value="ALL">🌐 Vue Consolidée Départementale (Tous les agents)</option>
+                    {agentsList.map((ag) => (
+                      <option key={ag.id} value={ag.badgeNumber}>
+                        👤 {ag.name} ({ag.badgeNumber}) — {ag.role}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {adminAgentFilter !== 'ALL' && (
+                  <button
+                    type="button"
+                    onClick={() => setAdminAgentFilter('ALL')}
+                    className="ml-1 text-[11px] font-bold text-[#b91c1c] hover:bg-[#fee2e2] px-2 py-0.5 rounded transition-colors cursor-pointer"
+                    title="Revenir à la vue consolidée globale"
+                  >
+                    ✕ Réinitialiser
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-bold bg-[#dcfce7] text-[#15803d] px-2.5 py-1 rounded-lg border border-[#86efac]">
+                  ✓ Données synchronisées à votre session
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowLoginModal(true)}
+                  className="text-xs font-bold text-[#022448] bg-white hover:bg-[#f1f5f9] px-3 py-1.5 rounded-lg border border-[#cbd5e1] transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
+                >
+                  <span className="material-symbols-outlined text-[14px]">switch_account</span>
+                  <span>Changer de session</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* 3 HIGHLIGHT METRICS HERO CARDS (The User's Core Request) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         {/* KPI 1: NOMBRE D'ÉTABLISSEMENTS IDENTIFIÉS */}
@@ -495,10 +732,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateToTab }) => {
             <div className="flex items-center justify-between">
               <span className="font-sans text-[11px] font-bold uppercase tracking-wider text-[#43474e] flex items-center gap-1.5">
                 <span className="material-symbols-outlined text-[#022448] text-[18px]">storefront</span>
-                Établissements Identifiés
+                {isAdmin && adminAgentFilter === 'ALL'
+                  ? 'Établissements Identifiés (Dép.)'
+                  : 'Établissements Assignés'}
               </span>
               <span className="font-sans text-[10px] font-bold bg-[#e3e8f9] text-[#022448] px-2 py-0.5 rounded">
-                Recensement SAA
+                {isAdmin && adminAgentFilter === 'ALL' ? 'Recensement SAA Global' : 'Portefeuille Filtré'}
               </span>
             </div>
 
@@ -507,11 +746,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateToTab }) => {
                 {stats.totalIdentified}
               </span>
               <span className="font-sans text-xs font-bold text-[#006d2f] bg-[#dcfce7] px-2 py-0.5 rounded">
-                +14 cette semaine
+                {isAdmin && adminAgentFilter === 'ALL' ? '+14 cette semaine' : 'En portefeuille'}
               </span>
             </div>
             <p className="font-sans text-xs text-[#43474e] mt-1">
-              Établissements de loisirs géolocalisés et inscrits au cadastre de Pointe-Noire.
+              {isAdmin && adminAgentFilter === 'ALL'
+                ? 'Établissements de loisirs géolocalisés et inscrits au cadastre de Pointe-Noire.'
+                : `Établissements attribués pour visite, inspection et perception des droits.`}
             </p>
 
             {/* Split Formel vs Informel */}
@@ -520,21 +761,23 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateToTab }) => {
                 <span className="text-[#0369a1] block text-[10px] uppercase font-bold">Piste Formelle (RCCM)</span>
                 <span className="font-mono font-bold text-sm text-[#0c4a6e]">{stats.totalFormal}</span>
                 <span className="text-[10px] text-[#0369a1] block">
-                  ({Math.round((stats.totalFormal / stats.totalIdentified) * 100)}% du parc)
+                  ({stats.totalIdentified > 0 ? Math.round((stats.totalFormal / stats.totalIdentified) * 100) : 0}% du parc)
                 </span>
               </div>
               <div className="bg-[#fff7ed] p-2.5 rounded-lg border border-[#fed7aa]">
                 <span className="text-[#c2410c] block text-[10px] uppercase font-bold">Piste Informelle (Pénalité)</span>
                 <span className="font-mono font-bold text-sm text-[#9a3412]">{stats.totalInformal}</span>
                 <span className="text-[10px] text-[#c2410c] block">
-                  ({Math.round((stats.totalInformal / stats.totalIdentified) * 100)}% du parc)
+                  ({stats.totalIdentified > 0 ? Math.round((stats.totalInformal / stats.totalIdentified) * 100) : 0}% du parc)
                 </span>
               </div>
             </div>
           </div>
 
           <div className="mt-4 pt-3 flex items-center justify-between text-xs font-sans">
-            <span className="text-[#747783]">Objectif PTA Annuel : 160</span>
+            <span className="text-[#747783]">
+              {isAdmin && adminAgentFilter === 'ALL' ? 'Objectif PTA Annuel : 160' : `Secteur : ${selectedFilteredAgent?.zone || currentAgent.zone || 'Pointe-Noire'}`}
+            </span>
             {onNavigateToTab && (
               <button
                 type="button"
@@ -555,11 +798,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateToTab }) => {
             <div className="flex items-center justify-between">
               <span className="font-sans text-[11px] font-bold uppercase tracking-wider text-[#004528] flex items-center gap-1.5">
                 <span className="material-symbols-outlined text-[#006d2f] text-[18px]">payments</span>
-                Recouvré en Temps Réel
+                {isAdmin && adminAgentFilter === 'ALL' ? 'Recouvré Département (En Direct)' : 'Recouvrement Réalisé'}
               </span>
               <span className="font-sans text-[10px] font-bold bg-[#dcfce7] text-[#006d2f] px-2 py-0.5 rounded flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-[#006d2f] animate-ping"></span>
-                En direct
+                {isAdmin && adminAgentFilter === 'ALL' ? 'Trésor Central' : 'Caisse Agent'}
               </span>
             </div>
 
@@ -596,7 +839,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateToTab }) => {
                 <span className="font-mono font-bold text-xs text-[#14532d] block mt-0.5">
                   {stats.fieldCollected.toLocaleString('fr-FR')} FCFA
                 </span>
-                <span className="text-[10px] text-[#15803d]">64% des encaissements</span>
+                <span className="text-[10px] text-[#15803d]">68% des encaissements</span>
               </div>
 
               <div className="bg-[#f0f4ff] p-2.5 rounded-lg border border-[#c7d2fe]">
@@ -607,7 +850,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateToTab }) => {
                 <span className="font-mono font-bold text-xs text-[#1e1b4b] block mt-0.5">
                   {stats.directionCollected.toLocaleString('fr-FR')} FCFA
                 </span>
-                <span className="text-[10px] text-[#3730a3]">36% des encaissements</span>
+                <span className="text-[10px] text-[#3730a3]">32% des encaissements</span>
               </div>
             </div>
           </div>
@@ -636,7 +879,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateToTab }) => {
             <div className="flex items-center justify-between">
               <span className="font-sans text-[11px] font-bold uppercase tracking-wider text-[#b91c1c] flex items-center gap-1.5">
                 <span className="material-symbols-outlined text-[#dc2626] text-[18px]">warning</span>
-                Alertes Mises en Demeure
+                {isAdmin && adminAgentFilter === 'ALL'
+                  ? 'Alertes Mises en Demeure (Dép.)'
+                  : 'Mises en Demeure du Portefeuille'}
               </span>
               <span className="font-sans text-[10px] font-bold bg-[#fee2e2] text-[#b91c1c] px-2 py-0.5 rounded flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-[#dc2626] animate-pulse"></span>
@@ -688,7 +933,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateToTab }) => {
 
       {/* GRAPHIQUE EN BARRES RECHARTS : TAUX DE RECOUVREMENT MENSUEL PAR SECTEUR D'ACTIVITÉ */}
       <RecoveryRateChart
-        establishments={liveEstablishments}
+        establishments={effectiveEstablishments}
         onNavigateToTerrain={onNavigateToTab ? () => onNavigateToTab('terrain') : undefined}
       />
 
@@ -967,49 +1212,57 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateToTab }) => {
               </h3>
             </div>
             <span className="font-sans text-[10px] uppercase font-bold bg-[#dcfce7] text-[#006d2f] px-2 py-0.5 rounded">
-              Journal de caisse
+              {isAdmin && adminAgentFilter === 'ALL' ? 'Journal Global' : 'Caisse Session'}
             </span>
           </div>
 
           <div className="space-y-2.5">
-            {recentCollections.map((col) => (
-              <div
-                key={col.id}
-                className="p-3 rounded-lg border border-[#edf0fa] hover:bg-[#fbfbfe] transition-colors flex items-center justify-between gap-3 text-xs font-sans"
-              >
-                <div className="space-y-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-mono text-[10px] font-bold text-[#022448] bg-[#f1f3ff] px-1.5 py-0.2 rounded">
-                      {col.receiptRef}
+            {displayedRecentCollections.length === 0 ? (
+              <div className="text-center py-8 text-gray-400 font-sans text-xs italic">
+                Aucun encaissement récent pour ce portefeuille.
+              </div>
+            ) : (
+              displayedRecentCollections.map((col) => (
+                <div
+                  key={col.id}
+                  className="p-3 rounded-lg border border-[#edf0fa] hover:bg-[#fbfbfe] transition-colors flex items-center justify-between gap-3 text-xs font-sans"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-mono text-[10px] font-bold text-[#022448] bg-[#f1f3ff] px-1.5 py-0.2 rounded">
+                        {col.receiptRef}
+                      </span>
+                      <span
+                        className={`text-[9px] font-bold px-1.5 py-0.2 rounded uppercase ${
+                          col.location === 'TERRAIN' ? 'bg-[#fef3c7] text-[#92400e]' : 'bg-[#e0e7ff] text-[#3730a3]'
+                        }`}
+                      >
+                        {col.location === 'TERRAIN' ? 'Terrain Mobile' : 'Direction'}
+                      </span>
+                    </div>
+                    <h4 className="font-bold text-[#161c27]">{col.establishmentName}</h4>
+                    <p className="text-[11px] text-[#43474e]">
+                      Par {col.collectedBy} • <span className="text-[#006d2f] font-medium">{col.timestamp}</span>
+                    </p>
+                  </div>
+
+                  <div className="text-right shrink-0">
+                    <span className="font-mono text-sm font-bold text-[#006d2f] block">
+                      +{col.amount.toLocaleString('fr-FR')} FCFA
                     </span>
-                    <span
-                      className={`text-[9px] font-bold px-1.5 py-0.2 rounded uppercase ${
-                        col.location === 'TERRAIN' ? 'bg-[#fef3c7] text-[#92400e]' : 'bg-[#e0e7ff] text-[#3730a3]'
-                      }`}
-                    >
-                      {col.location === 'TERRAIN' ? 'Terrain Mobile' : 'Direction'}
+                    <span className="text-[10px] text-[#747783] block">
+                      Échéance : {col.nextDueDate}
                     </span>
                   </div>
-                  <h4 className="font-bold text-[#161c27]">{col.establishmentName}</h4>
-                  <p className="text-[11px] text-[#43474e]">
-                    Par {col.collectedBy} • <span className="text-[#006d2f] font-medium">{col.timestamp}</span>
-                  </p>
                 </div>
-
-                <div className="text-right shrink-0">
-                  <span className="font-mono text-sm font-bold text-[#006d2f] block">
-                    +{col.amount.toLocaleString('fr-FR')} FCFA
-                  </span>
-                  <span className="text-[10px] text-[#747783] block">
-                    Échéance : {col.nextDueDate}
-                  </span>
-                </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
 
           <div className="pt-2 border-t border-[#edf0fa] flex items-center justify-between text-xs font-sans text-[#747783]">
-            <span>Total du jour : <strong>536 000 FCFA</strong></span>
+            <span>
+              Total recouvré : <strong className="text-[#006d2f]">{stats.totalCollected.toLocaleString('fr-FR')} FCFA</strong>
+            </span>
             {onNavigateToTab && (
               <button
                 type="button"
@@ -1032,42 +1285,48 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateToTab }) => {
               </h3>
             </div>
             <span className="font-sans text-[10px] uppercase font-bold bg-[#e3e8f9] text-[#022448] px-2 py-0.5 rounded">
-              Cadastre Fiscal
+              {isAdmin && adminAgentFilter === 'ALL' ? 'Cadastre Fiscal Global' : 'Secteurs Couverts'}
             </span>
           </div>
 
           <div className="space-y-3.5">
-            {districtMetrics.map((d, index) => {
-              const districtRate = Math.round((d.collectedAmount / d.totalDue) * 100);
-              return (
-                <div key={index} className="space-y-1 text-xs font-sans">
-                  <div className="flex items-center justify-between">
+            {computedDistrictMetrics.length === 0 ? (
+              <div className="text-center py-8 text-gray-400 font-sans text-xs italic">
+                Aucun arrondissement identifié dans ce périmètre.
+              </div>
+            ) : (
+              computedDistrictMetrics.map((d, index) => {
+                const districtRate = d.totalDue > 0 ? Math.round((d.collectedAmount / d.totalDue) * 100) : 0;
+                return (
+                  <div key={index} className="space-y-1 text-xs font-sans">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-[#161c27]">{d.district}</span>
+                        <span className="text-[10px] bg-[#f1f3ff] text-[#43474e] font-semibold px-1.5 py-0.2 rounded">
+                          {d.totalIdentified} lieux ({d.formalCount} formels / {d.informalCount} informels)
+                        </span>
+                      </div>
+                      <div className="font-mono text-right">
+                        <strong className="text-[#006d2f]">{d.collectedAmount.toLocaleString('fr-FR')} FCFA</strong>
+                        <span className="text-[#747783] text-[10px]"> / {d.totalDue.toLocaleString('fr-FR')} FCFA</span>
+                      </div>
+                    </div>
+
                     <div className="flex items-center gap-2">
-                      <span className="font-bold text-[#161c27]">{d.district}</span>
-                      <span className="text-[10px] bg-[#f1f3ff] text-[#43474e] font-semibold px-1.5 py-0.2 rounded">
-                        {d.totalIdentified} lieux ({d.formalCount} formels / {d.informalCount} informels)
+                      <div className="flex-1 bg-[#edf0fa] h-2.5 rounded-full overflow-hidden flex">
+                        <div
+                          className="bg-[#022448] h-full rounded-full transition-all duration-500"
+                          style={{ width: `${districtRate}%` }}
+                        ></div>
+                      </div>
+                      <span className="font-mono font-bold text-[11px] text-[#022448] w-10 text-right">
+                        {districtRate}%
                       </span>
                     </div>
-                    <div className="font-mono text-right">
-                      <strong className="text-[#006d2f]">{d.collectedAmount.toLocaleString('fr-FR')} FCFA</strong>
-                      <span className="text-[#747783] text-[10px]"> / {d.totalDue.toLocaleString('fr-FR')} FCFA</span>
-                    </div>
                   </div>
-
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 bg-[#edf0fa] h-2.5 rounded-full overflow-hidden flex">
-                      <div
-                        className="bg-[#022448] h-full rounded-full transition-all duration-500"
-                        style={{ width: `${districtRate}%` }}
-                      ></div>
-                    </div>
-                    <span className="font-mono font-bold text-[11px] text-[#022448] w-10 text-right">
-                      {districtRate}%
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
 
           <div className="mt-4 p-3 bg-[#f0f9ff] rounded-lg border border-[#bae6fd] flex items-start gap-2.5 text-xs font-sans text-[#0369a1]">

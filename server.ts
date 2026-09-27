@@ -25,6 +25,9 @@ const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     persistSession: false,
     autoRefreshToken: false,
   },
+  global: {
+    fetch: fetch,
+  },
 });
 
 async function startServer() {
@@ -51,10 +54,10 @@ async function startServer() {
     }
   });
 
-  // 2. Fetch establishments joined with terrain_records
+  // 2. Fetch establishments joined with terrain_records and agent details
   app.get('/api/establishments', async (_req, res) => {
     try {
-      const [estsRes, recsRes] = await Promise.all([
+      const [estsRes, recsRes, agentsRes, badgesRes] = await Promise.all([
         supabaseAdmin
           .from('establishments')
           .select('*')
@@ -63,14 +66,35 @@ async function startServer() {
           .from('terrain_records')
           .select('*')
           .order('record_date', { ascending: false }),
+        supabaseAdmin.from('agents').select('*'),
+        supabaseAdmin.from('badges').select('*'),
       ]);
 
       if (estsRes.error) {
         return res.status(500).json({ error: estsRes.error.message });
       }
 
-      const establishments = estsRes.data || [];
+      const rawEsts = estsRes.data || [];
       const records = recsRes.data || [];
+      const agents = agentsRes.data || [];
+      const badges = badgesRes.data || [];
+
+      const establishments = rawEsts.map((est) => {
+        const ag = agents.find((a) => a.id === est.assigned_agent_id);
+        const bd = ag ? badges.find((b) => b.agent_id === ag.id) : null;
+        return {
+          ...est,
+          assigned_agent_name: ag
+            ? ag.nom_complet || `${ag.prenom || ''} ${ag.nom || ''}`.trim()
+            : undefined,
+          assigned_agent_badge: bd
+            ? bd.badge_number
+            : ag
+            ? ag.badge_id
+            : undefined,
+          assigned_agent_phone: ag ? ag.telephone : undefined,
+        };
+      });
 
       return res.json({ establishments, records });
     } catch (err: any) {

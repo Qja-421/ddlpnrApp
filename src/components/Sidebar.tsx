@@ -24,26 +24,69 @@ interface MenuSection {
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab }) => {
   const [isMobileOpen, setIsMobileOpen] = useState(false);
-  const { currentAgent, isAdmin, setShowLoginModal } = useSession();
+  const { currentAgent, isAdmin, setShowLoginModal, logout } = useSession();
 
   const sections: MenuSection[] = [
     {
-      title: 'PILOTAGE GÉNÉRAL',
+      title: '1. OPÉRATIONS DE TERRAIN (SAA)',
       items: [
         {
-          id: 'dashboard',
-          label: 'Tableau de Bord',
-          subLabel: 'KPI & Recouvrement',
-          icon: 'insights',
+          id: 'agenda',
+          label: 'Google Agenda Rdv',
+          subLabel: 'Planning, Tournées & Anti-doublon',
+          icon: 'calendar_month',
+          badge: 'GOOGLE CALENDAR',
+          badgeColor: 'bg-[#0284c7] text-white',
+        },
+        {
+          id: 'terrain',
+          label: 'Répertoire Établissements',
+          subLabel: 'Annuaire des 113+ Établissements Réels',
+          icon: 'storefront',
+          badge: 'SUPABASE',
+          badgeColor: 'bg-[#006d2f] text-white',
+        },
+        {
+          id: 'terminal-mobile',
+          label: 'Terminal Mobile Agent',
+          subLabel: 'Saisie Tactile Rapide (Tournées)',
+          icon: 'smartphone',
+          badge: 'BYOD',
+          badgeColor: 'bg-[#d97706] text-white',
         },
       ],
     },
     {
-      title: 'RAPPORTS TRIMESTRIELS (DGL & PRÉFET)',
+      title: '2. DIRECTION & RECOUVREMENT',
+      items: [
+        {
+          id: 'dashboard',
+          label: 'Tableau de Bord & KPI',
+          subLabel: 'Indicateurs Globaux & Recouvrements',
+          icon: 'insights',
+        },
+        {
+          id: 'registre',
+          label: 'Registre des Instructions',
+          subLabel: '31 Dossiers d’Agrément Officiels',
+          icon: 'fact_check',
+          badge: 'ACTES',
+          badgeColor: 'bg-[#1e3a5f] text-white',
+        },
+        {
+          id: 'atelier',
+          label: 'Atelier de Rédaction A4',
+          subLabel: 'Convocations, Mises en Demeure & Arrêtés',
+          icon: 'edit_document',
+        },
+      ],
+    },
+    {
+      title: '3. RAPPORTS & PILOTAGE OFFICIEL',
       items: [
         {
           id: 'rapport-trimestriel',
-          label: 'Rapport Trimestriel',
+          label: 'Rapports Trimestriels DGL',
           subLabel: 'Les 4 Services (SAF, SAA, Stat, Prom)',
           icon: 'description',
           badge: 'CANEVAS DGL',
@@ -52,66 +95,24 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab }) => {
         {
           id: 'suivi-pta',
           label: 'Suivi PTA 2026',
-          subLabel: 'Matrice de pilotage annuelle',
-          icon: 'fact_check',
+          subLabel: 'Plan de Travail Annuel Départemental',
+          icon: 'checklist',
         },
       ],
     },
     {
-      title: 'SERVICE AUTORISATION & ANIMATION',
+      title: '4. RÉGLEMENTATION & BARÈMES',
       items: [
-        {
-          id: 'terminal-mobile',
-          label: 'Terminal Mobile / Tablette',
-          subLabel: 'Agents Terrain (Recensement & Caisses)',
-          icon: 'smartphone',
-          badge: 'TACTILE',
-          badgeColor: 'bg-[#d97706] text-white',
-        },
-        {
-          id: 'terrain',
-          label: 'Terrain & Recouvrement',
-          subLabel: 'Inspections & Quittances',
-          icon: 'add_location_alt',
-        },
-        {
-          id: 'agenda',
-          label: 'Agenda Rdv Terrain',
-          subLabel: 'Convocations & Délais',
-          icon: 'calendar_month',
-        },
         {
           id: 'tarifs',
-          label: 'Tarifs m² & Activités',
-          subLabel: 'Barème réglementaire',
+          label: 'Barème des Tarifs m²',
+          subLabel: 'Redevances Annuelles & Calculateur',
           icon: 'calculate',
         },
-      ],
-    },
-    {
-      title: 'RÉDACTION JURIDIQUE & ARCHIVES',
-      items: [
-        {
-          id: 'atelier',
-          label: 'Atelier A4 & Actes',
-          subLabel: 'Notifications & Arrêtés',
-          icon: 'edit_document',
-        },
-        {
-          id: 'registre',
-          label: 'Registre des Actes',
-          subLabel: 'Chrono départemental',
-          icon: 'menu_book',
-        },
-      ],
-    },
-    {
-      title: 'TEXTES & RÉGLEMENTATION',
-      items: [
         {
           id: 'referentiel',
-          label: 'Référentiel Textes',
-          subLabel: 'Décrets & Lois',
+          label: 'Textes & Lois de la République',
+          subLabel: 'Décrets, Lois & Arrêtés Ministériels',
           icon: 'gavel',
         },
       ],
@@ -301,28 +302,48 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab }) => {
               </div>
             </div>
 
-            {/* Switch user / login button */}
-            <button
-              type="button"
-              onClick={() => setShowLoginModal(true)}
-              className="p-1.5 bg-white/10 hover:bg-white/20 text-[#ffe082] rounded-lg transition-colors cursor-pointer shrink-0"
-              title="Changer de session / Code PIN"
-            >
-              <span className="material-symbols-outlined text-[16px]">lock_reset</span>
-            </button>
+            {/* Switch user & Logout buttons */}
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowLoginModal(true)}
+                className="p-1.5 bg-white/10 hover:bg-white/20 text-[#ffe082] rounded-lg transition-colors cursor-pointer"
+                title="Changer de session / Code PIN"
+              >
+                <span className="material-symbols-outlined text-[16px]">lock_reset</span>
+              </button>
+              <button
+                type="button"
+                onClick={logout}
+                className="p-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-200 hover:text-white rounded-lg transition-colors cursor-pointer"
+                title="Déconnexion / Verrouiller l'accès"
+              >
+                <span className="material-symbols-outlined text-[16px]">logout</span>
+              </button>
+            </div>
           </div>
 
           <div className="flex items-center justify-between pt-1 border-t border-white/10 text-[9px] text-white/50">
             <span className="truncate">
               {isAdmin ? '👁️ Vue Globale Décloisonnée' : '🔒 Session Terrain Isolée'}
             </span>
-            <button
-              type="button"
-              onClick={() => setShowLoginModal(true)}
-              className="text-[#ffe082] hover:underline cursor-pointer"
-            >
-              Code PIN
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowLoginModal(true)}
+                className="text-[#ffe082] hover:underline cursor-pointer"
+              >
+                Code PIN
+              </button>
+              <span>·</span>
+              <button
+                type="button"
+                onClick={logout}
+                className="text-red-300 hover:underline cursor-pointer"
+              >
+                Quitter
+              </button>
+            </div>
           </div>
         </div>
       </aside>

@@ -17,7 +17,7 @@ interface CalendrierRdvTerrainProps {
   agents: AgentAccount[];
 }
 
-type CalendarViewMode = 'month' | 'week' | 'day';
+type CalendarViewMode = 'month' | 'week' | 'day' | 'agenda';
 
 // Helper: Normalize French date (DD/MM/YYYY) or ISO (YYYY-MM-DD) to ISO format (YYYY-MM-DD)
 export function normalizeDateToISO(dateStr?: string | null): string | null {
@@ -345,6 +345,25 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
   const settledEstablishments = useMemo(() => {
     return establishments.filter((est) => est.paidAmount >= est.totalDue && est.totalDue > 0);
   }, [establishments]);
+
+  // Chronological group of all events for Google Calendar Agenda View
+  const upcomingAgendaEvents = useMemo(() => {
+    const sortedDates = Array.from(eventsByDate.keys()).sort();
+    return sortedDates
+      .map((iso) => ({
+        iso,
+        frDate: formatISOToFR(iso),
+        isToday: iso === '2026-09-24',
+        dayName: new Intl.DateTimeFormat('fr-FR', {
+          weekday: 'long',
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric',
+        }).format(new Date(iso + 'T12:00:00')),
+        establishments: eventsByDate.get(iso) || [],
+      }))
+      .filter((group) => group.establishments.length > 0);
+  }, [eventsByDate]);
 
   // Calendar calculations for Month View
   const year = currentDate.getFullYear();
@@ -854,6 +873,15 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
       <div className="bg-white rounded-2xl border border-[#dde2f3] shadow-sm p-4 sm:p-5 flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-4">
         {/* Left: Brand / Title + Prev/Next Controls + Month/Year Dropdowns */}
         <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => setShowGoogleSidebar((prev) => !prev)}
+            className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-700 cursor-pointer transition-colors"
+            title="Afficher/Masquer le volet latéral (Google Agenda)"
+          >
+            <span className="material-symbols-outlined text-xl">menu</span>
+          </button>
+
           <div className="flex items-center gap-2 bg-[#f1f3ff] text-[#022448] px-3 py-1.5 rounded-lg border border-[#dde2f3]">
             <span className="material-symbols-outlined text-xl text-[#006d2f]">
               calendar_month
@@ -1009,6 +1037,18 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
             >
               <span className="material-symbols-outlined text-sm">calendar_view_day</span>
               <span>Jour</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('agenda')}
+              className={`px-2.5 py-1.5 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1 ${
+                viewMode === 'agenda'
+                  ? 'bg-white text-[#022448] shadow-sm'
+                  : 'text-[#43474e] hover:text-[#022448]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">view_agenda</span>
+              <span>Planning</span>
             </button>
           </div>
 
@@ -1206,10 +1246,10 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
           </div>
         )}
 
-        {/* Main View Area: Month or Week or Day */}
+        {/* Main View Area: Month, Week, Day or Agenda */}
         <div className="flex-1 w-full min-w-0 grid grid-cols-1 xl:grid-cols-4 gap-4">
-        {/* Left Column (3 cols): Calendar Grid or Week Timeline */}
-        <div className="xl:col-span-3 bg-white rounded-2xl border border-[#dde2f3] shadow-sm overflow-hidden flex flex-col">
+        {/* Left Column (3 or 4 cols): Calendar Grid or Agenda Timeline */}
+        <div className={`${viewMode === 'agenda' ? 'xl:col-span-4' : 'xl:col-span-3'} bg-white rounded-2xl border border-[#dde2f3] shadow-sm overflow-hidden flex flex-col`}>
           {/* SEARCH BAR & SUMMARY */}
           <div className="p-3 bg-[#f8f9ff] border-b border-[#dde2f3] flex flex-wrap items-center justify-between gap-3 text-xs">
             <div className="relative flex-1 min-w-[220px]">
@@ -1566,10 +1606,172 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
               )}
             </div>
           )}
+
+          {/* VIEW: AGENDA (PLANNING LIST STYLE GOOGLE CALENDAR) */}
+          {viewMode === 'agenda' && (
+            <div className="p-5 flex-1 flex flex-col space-y-6">
+              <div className="flex items-center justify-between border-b pb-3">
+                <div>
+                  <h3 className="font-garamond text-xl font-bold text-[#022448] flex items-center gap-2">
+                    <span className="material-symbols-outlined text-2xl text-[#006d2f]">
+                      view_agenda
+                    </span>
+                    <span>Planning Chronologique des Rendez-vous &amp; Convocations</span>
+                  </h3>
+                  <p className="text-xs text-gray-500">
+                    Vue ordonnée par date de toutes les échéances prévues dans votre portefeuille DDL-PN.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openNewRdvModal(selectedDayISO)}
+                  className="bg-[#006d2f] hover:bg-[#005524] text-white text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer shadow-xs"
+                >
+                  <span className="material-symbols-outlined text-sm">add</span>
+                  <span>+ Nouveau Rendez-vous</span>
+                </button>
+              </div>
+
+              {upcomingAgendaEvents.length === 0 ? (
+                <div className="text-center py-16 text-gray-400">
+                  <span className="material-symbols-outlined text-5xl mb-3 text-gray-300">
+                    event_available
+                  </span>
+                  <p className="text-base font-semibold text-gray-600">Aucun rendez-vous planifié dans cette sélection.</p>
+                  <p className="text-xs text-gray-400 mt-1">Utilisez le bouton "+ Nouveau Rendez-vous" pour programmer une visite de terrain ou une convocation.</p>
+                  <button
+                    type="button"
+                    onClick={() => openNewRdvModal(selectedDayISO)}
+                    className="mt-4 px-4 py-2 bg-[#006d2f] text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer inline-flex items-center gap-1.5"
+                  >
+                    <span className="material-symbols-outlined text-sm">add</span>
+                    <span>Programmer un rendez-vous</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {upcomingAgendaEvents.map((group) => (
+                    <div key={group.iso} className="space-y-2">
+                      <div className="flex items-center gap-2 border-b border-[#dde2f3] pb-1.5">
+                        <span
+                          className={`font-bold text-xs uppercase tracking-wider px-2 py-0.5 rounded-md ${
+                            group.isToday
+                              ? 'bg-[#006d2f] text-white'
+                              : 'bg-[#e8eeff] text-[#022448]'
+                          }`}
+                        >
+                          {group.isToday ? 'AUJOURD\'HUI' : group.frDate}
+                        </span>
+                        <span className="text-xs font-semibold text-gray-700 capitalize">
+                          {group.dayName}
+                        </span>
+                        <span className="text-[11px] text-gray-400 font-mono">
+                          ({group.establishments.length} rdv)
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {group.establishments.map((est) => {
+                          const isSettled = est.paidAmount >= est.totalDue && est.totalDue > 0;
+                          const remaining = Math.max(0, est.totalDue - est.paidAmount);
+                          const assignedColor =
+                            agents.find((a) => a.badgeNumber === est.assignedAgentBadge)?.color ||
+                            '#006d2f';
+
+                          return (
+                            <div
+                              key={est.id}
+                              className="bg-white border border-[#dde2f3] rounded-xl p-3.5 shadow-2xs hover:shadow-md transition-all flex flex-col justify-between space-y-3"
+                              style={{ borderLeftWidth: 4, borderLeftColor: assignedColor }}
+                            >
+                              <div className="space-y-1.5">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <h4 className="font-bold text-sm text-[#022448] truncate">
+                                      {est.name}
+                                    </h4>
+                                    <p className="text-[11px] text-gray-500 truncate">
+                                      {est.promoter} • {est.district}
+                                    </p>
+                                  </div>
+                                  <span
+                                    className={`text-[9.5px] font-extrabold uppercase px-2 py-0.5 rounded shrink-0 ${
+                                      isSettled
+                                        ? 'bg-[#dcfce7] text-[#065f46]'
+                                        : 'bg-[#fff7ed] text-[#9a3412]'
+                                    }`}
+                                  >
+                                    {isSettled ? 'Soldé Annuel' : `${Math.round(remaining / 1000)}k F dû`}
+                                  </span>
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                                  <span className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded font-mono">
+                                    {est.nextAppointmentTime || '09:30'}
+                                  </span>
+                                  <span className="bg-blue-50 text-blue-800 px-2 py-0.5 rounded font-semibold">
+                                    {est.nextAppointmentType === 'BUREAU' ? '🏢 Convocation Bureau' : '📍 Visite Terrain'}
+                                  </span>
+                                  {isAdmin && est.assignedAgentName && (
+                                    <span className="bg-emerald-50 text-emerald-800 px-2 py-0.5 rounded font-medium">
+                                      👤 {est.assignedAgentName}
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="bg-[#f8f9ff] p-2 rounded-lg text-[11px] flex items-center justify-between">
+                                  <span className="text-gray-500">Avancement :</span>
+                                  <span className="font-bold text-[#006d2f]">
+                                    {est.paidAmount.toLocaleString('fr-FR')} / {est.totalDue.toLocaleString('fr-FR')} F
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
+                                <button
+                                  type="button"
+                                  onClick={() => openQuickPay(est)}
+                                  className="flex-1 bg-[#006d2f] hover:bg-[#005524] text-white text-xs font-bold py-1.5 px-2 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                                >
+                                  <span className="material-symbols-outlined text-sm">payments</span>
+                                  <span>Encaisser</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openReschedule(est)}
+                                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold py-1.5 px-2.5 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition-colors"
+                                  title="Reporter le rendez-vous"
+                                >
+                                  <span className="material-symbols-outlined text-sm">update</span>
+                                  <span>Reporter</span>
+                                </button>
+                                <a
+                                  href={`https://wa.me/${est.phone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(
+                                    `Bonjour M. ${est.promoter}, nous vous confirmons votre rendez-vous avec la Direction Départementale des Loisirs (DDL-PN).`
+                                  )}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="bg-[#25D366] hover:bg-[#20ba5a] text-white p-1.5 rounded-lg flex items-center justify-center cursor-pointer"
+                                  title="WhatsApp Promoteur"
+                                >
+                                  <span className="material-symbols-outlined text-sm">chat</span>
+                                </a>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Right Column (1 col): Selected Day Detail & Instant Actions */}
-        <div className="bg-white rounded-2xl border border-[#dde2f3] shadow-sm p-4 flex flex-col space-y-4">
+        {viewMode !== 'agenda' && (
+          <div className="bg-white rounded-2xl border border-[#dde2f3] shadow-sm p-4 flex flex-col space-y-4">
           <div className="border-b border-[#dde2f3] pb-3 flex items-center justify-between">
             <div>
               <span className="text-[10px] font-sans uppercase font-bold text-gray-400">
@@ -1696,6 +1898,7 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
             <span>Programmer sur le {formatISOToFR(selectedDayISO)}</span>
           </button>
         </div>
+        )}
       </div>
       </div>
 

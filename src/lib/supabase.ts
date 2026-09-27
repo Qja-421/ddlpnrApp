@@ -212,11 +212,16 @@ export async function apiFetchEstablishments(
     }
   }
 
-  // Fallback: localStorage or initial state
+  // Fallback: localStorage only if it contains real Supabase records (not mock EST-2026-0)
   const cached = localStorage.getItem(LOCAL_ESTABLISHMENTS_KEY);
   if (cached) {
     try {
-      return { data: JSON.parse(cached), isSupabase: false };
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed) && parsed.length > 0 && !String(parsed[0].id).startsWith('EST-2026-0')) {
+        return { data: parsed, isSupabase: false };
+      } else {
+        localStorage.removeItem(LOCAL_ESTABLISHMENTS_KEY);
+      }
     } catch {
       // Ignored
     }
@@ -276,6 +281,19 @@ function mapSupabaseToEstablishments(rawEsts: any[], rawRecs: any[]): FieldEstab
     const district =
       formatArrondissement(e.arrondissement) + (e.quartier ? ` (${e.quartier})` : '');
 
+    // Map real agent attributes
+    const assignedAgentId = e.assigned_agent_id || '24234c2a-3c46-4f7b-b69a-c82df1c7bbfc';
+    const assignedAgentName =
+      e.assigned_agent_name ||
+      (e.assigned_agent_id === 'd016ff2d-7544-466e-98c7-3cc83dbc1203'
+        ? 'Rhonel KIOUNGA'
+        : 'Jacques Alphonse MATOKO');
+    const assignedAgentBadge =
+      e.assigned_agent_badge ||
+      (e.assigned_agent_id === 'd016ff2d-7544-466e-98c7-3cc83dbc1203'
+        ? 'DDL-PN-26-00000A-86244'
+        : 'DDL-PN-2026-306C5C');
+
     return {
       id: e.id,
       name: e.name || 'Établissement Sans Nom',
@@ -289,7 +307,10 @@ function mapSupabaseToEstablishments(rawEsts: any[], rawRecs: any[]): FieldEstab
       rccm: e.rccm || undefined,
       surfaceSqm: Number(e.surface_sqm) || 60,
       identifiedDate: e.created_at ? new Date(e.created_at).toLocaleDateString('fr-FR') : '01/03/2026',
-      identifiedBy: 'Agent SAA DDL-PN',
+      identifiedBy: `Agent DDL-PN (${assignedAgentName})`,
+      assignedAgentId,
+      assignedAgentName,
+      assignedAgentBadge,
       status,
       filingFee: 30000,
       penaltyFee: (e.regime_type || '').toUpperCase() === 'FORMEL' ? 0 : 50000,
@@ -484,11 +505,16 @@ export async function apiFetchDossiers(
     }
   }
 
-  // Cache fallback
+  // Cache fallback only if real data
   const cached = localStorage.getItem(LOCAL_DOSSIERS_KEY);
   if (cached) {
     try {
-      return { data: JSON.parse(cached), isSupabase: false };
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id !== 'paradisio') {
+        return { data: parsed, isSupabase: false };
+      } else {
+        localStorage.removeItem(LOCAL_DOSSIERS_KEY);
+      }
     } catch {
       // Ignored
     }
