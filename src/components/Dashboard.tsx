@@ -446,6 +446,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateToTab }) => {
 
             <button
               type="button"
+              onClick={() => onNavigateToTab && onNavigateToTab('rapport-trimestriel')}
+              className="bg-[#006d2f] hover:bg-[#005322] text-white font-sans text-xs font-bold px-3.5 py-2 rounded-lg shadow-sm flex items-center gap-1.5 transition-all cursor-pointer border border-[#80f899]/30"
+              title="Générer et imprimer le rapport trimestriel officiel destiné à la Direction Générale et au Cabinet du Préfet"
+            >
+              <span className="material-symbols-outlined text-[16px]">print</span>
+              <span>Rapport Trimestriel A4</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => {
                 setLastRefreshTime(`Actualisé à ${new Date().toLocaleTimeString('fr-FR')}`);
                 showToast('Données synchronisées avec le serveur central de la Direction.');

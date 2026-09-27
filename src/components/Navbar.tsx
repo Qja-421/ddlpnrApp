@@ -4,12 +4,14 @@ import { NotificationCenter } from './NotificationCenter.tsx';
 
 export type TabType =
   | 'dashboard'
+  | 'terminal-mobile'
   | 'terrain'
   | 'agenda'
   | 'atelier'
   | 'registre'
   | 'tarifs'
   | 'suivi-pta'
+  | 'rapport-trimestriel'
   | 'referentiel';
 
 interface NavbarProps {
@@ -128,6 +130,18 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab }) => {
           </button>
 
           <button
+            onClick={() => onSelectTab('rapport-trimestriel')}
+            className={`px-3 py-2 font-sans text-[11px] uppercase font-bold rounded transition-colors duration-150 cursor-pointer flex items-center gap-1.5 ${
+              activeTab === 'rapport-trimestriel'
+                ? 'bg-[#006d2f] text-white shadow-sm'
+                : 'text-[#006d2f] hover:bg-[#dcfce7] font-extrabold'
+            }`}
+          >
+            <span className="material-symbols-outlined text-[15px]">print</span>
+            <span>Rapport Trimestriel</span>
+          </button>
+
+          <button
             onClick={() => onSelectTab('referentiel')}
             className={`px-3 py-2 font-sans text-[11px] uppercase font-bold rounded transition-colors duration-150 cursor-pointer ${
               activeTab === 'referentiel'
@@ -231,6 +245,14 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab }) => {
           }`}
         >
           Suivi PTA
+        </button>
+        <button
+          onClick={() => onSelectTab('rapport-trimestriel')}
+          className={`px-2 py-1 uppercase font-bold whitespace-nowrap rounded ${
+            activeTab === 'rapport-trimestriel' ? 'bg-[#006d2f] text-white' : 'text-[#006d2f] font-bold'
+          }`}
+        >
+          Rapport Trimestriel
         </button>
         <button
           onClick={() => onSelectTab('referentiel')}

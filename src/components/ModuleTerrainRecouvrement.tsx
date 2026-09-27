@@ -13,7 +13,9 @@ import {
 import { getActivityRatePerSqm, CONFIRMED_ACTIVITY_RATES } from './MoteurTarifsActivites.tsx';
 import { CircuitBrazzaville } from './CircuitBrazzaville.tsx';
 import { EtatVersementTresor } from './EtatVersementTresor.tsx';
-import { CalendrierRdvTerrain, addOneYear, getFirstPaymentDate } from './CalendrierRdvTerrain.tsx';
+import { CalendrierRdvTerrain, addOneYear, getFirstPaymentDate, formatISOToFR } from './CalendrierRdvTerrain.tsx';
+import { TerminalAgentMobile } from './TerminalAgentMobile.tsx';
+import { useSession } from '../lib/sessionContext.tsx';
 
 export type { FieldEstablishment, AgentAccount };
 
@@ -426,6 +428,7 @@ const mockAgents: AgentAccount[] = [
 ];
 
 export type SubTabType =
+  | 'mode-mobile'
   | 'agenda-rdv'
   | 'recensement'
   | 'recouvrement'
@@ -442,6 +445,18 @@ export interface ModuleTerrainRecouvrementProps {
 export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps> = ({
   initialSubTab = 'agenda-rdv',
 }) => {
+  const {
+    currentAgent,
+    isAdmin,
+    isFieldAgent,
+    canAccessEstablishment,
+    checkEstablishmentCollision,
+    filterEstablishmentsForUser,
+    reassignEstablishment,
+    setShowLoginModal,
+    agentsList,
+  } = useSession();
+
   const [activeSubTab, setActiveSubTab] = useState<SubTabType>(initialSubTab);
 
   useEffect(() => {
@@ -456,6 +471,9 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
   const [filterDistrict, setFilterDistrict] = useState<string>('TOUS');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedSector, setSelectedSector] = useState<'ALL' | 'formal' | 'informal'>('ALL');
+  const [adminAgentFilter, setAdminAgentFilter] = useState<string>('TOUS');
+  const [reassignModalEst, setReassignModalEst] = useState<FieldEstablishment | null>(null);
+  const [targetReassignBadge, setTargetReassignBadge] = useState<string>('SAA-PN-008');
   const [isSupabaseLive, setIsSupabaseLive] = useState(false);
 
   // Pagination for scaling up to 20,000 establishments
@@ -523,10 +541,20 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
   const [newNegotiatedPenalty, setNewNegotiatedPenalty] = useState<number>(50000);
   const [newInstallmentsCount, setNewInstallmentsCount] = useState<1 | 2 | 3 | 4>(3);
 
+  // Manual Convocation inputs (Mission 1 - Delai manuel au bureau)
+  const [newConvocationDate, setNewConvocationDate] = useState<string>('2026-09-28');
+  const [newConvocationTime, setNewConvocationTime] = useState<string>('09:30');
+  const [newConvocationOffice, setNewConvocationOffice] = useState<string>(
+    'Service Autorisation & Animation (SAA) - Bureau N° 4, Direction Départementale des Loisirs, Avenue Moe Pratt'
+  );
+
   // Receipt Modal state
   const [receiptEst, setReceiptEst] = useState<FieldEstablishment | null>(null);
   const [collectAmount, setCollectAmount] = useState<number>(50000);
   const [collectLocation, setCollectLocation] = useState<'TERRAIN' | 'DIRECTION'>('TERRAIN');
+  const [collectPayMode, setCollectPayMode] = useState<'comptant' | 'acompte'>('acompte');
+  const [collectNextRdvType, setCollectNextRdvType] = useState<'BUREAU' | 'TERRAIN'>('BUREAU');
+  const [collectNextTime, setCollectNextTime] = useState<string>('10:00');
   const [nextDueDateInput, setNextDueDateInput] = useState<string>('15/04/2026');
   const [generatedReceipt, setGeneratedReceipt] = useState<{
     receiptRef: string;
@@ -553,9 +581,21 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
     setTimeout(() => setToastMsg(null), 4000);
   };
 
-  // Filter establishments
+  // Filter establishments (Cloisonné pour agent, consolidé pour admin)
   const filteredEsts = useMemo(() => {
-    return establishments.filter((e) => {
+    let base = establishments;
+    if (isFieldAgent) {
+      base = filterEstablishmentsForUser(establishments);
+    } else if (isAdmin && adminAgentFilter !== 'TOUS') {
+      base = establishments.filter((e) => {
+        const badge =
+          e.assignedAgentBadge ||
+          (e.identifiedBy?.includes('008') ? 'SAA-PN-008' : e.identifiedBy?.includes('005') ? 'SAA-PN-005' : 'SAA-PN-012');
+        return badge === adminAgentFilter;
+      });
+    }
+
+    return base.filter((e) => {
       const q = searchQuery.toLowerCase().trim();
       const matchesSearch =
         !q ||
@@ -568,7 +608,16 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
       const matchesSector = selectedSector === 'ALL' || e.sector === selectedSector;
       return matchesSearch && matchesDistrict && matchesSector;
     });
-  }, [establishments, searchQuery, filterDistrict, selectedSector]);
+  }, [
+    establishments,
+    searchQuery,
+    filterDistrict,
+    selectedSector,
+    isFieldAgent,
+    isAdmin,
+    adminAgentFilter,
+    filterEstablishmentsForUser,
+  ]);
 
   // Paginated establishments
   const totalPages = Math.max(1, Math.ceil(filteredEsts.length / pageSize));
@@ -585,6 +634,15 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
       return;
     }
 
+    // 🛡️ CONTRÔLE ANTI-COLLISION & ANTI-DOUBLON
+    const collision = checkEstablishmentCollision(newEstName, newPhone, newDistrict, establishments);
+    if (collision.hasCollision && collision.assignedToOther) {
+      showToast(
+        `⛔ DOUBLON STRICTEMENT INTERDIT : « ${collision.existingEst?.name} » est déjà suivi par ${collision.assignedAgentName} (${collision.assignedAgentBadge}) !`
+      );
+      return;
+    }
+
     // Rule 1: Fixed 30,000 FCFA filing fee applies ONLY to formal sector!
     const filing = newSector === 'formal' ? 30000 : 0;
     // Rule 3: Informal fee is freely negotiated on site (e.g. 20,000 / 50,000 / 85,000 FCFA) with no mandatory justification
@@ -595,6 +653,8 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
 
     const newId = `EST-2026-${String(establishments.length + 1).padStart(3, '0')}`;
     const activityInfo = CONFIRMED_ACTIVITY_RATES.find((a) => a.code === newActivity);
+
+    const convocationDateFR = formatISOToFR(newConvocationDate);
 
     const newRecord: FieldEstablishment = {
       id: newId,
@@ -609,22 +669,31 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
       rccm: newSector === 'formal' ? newRccm : undefined,
       surfaceSqm: newSurface,
       identifiedDate: new Date().toLocaleDateString('fr-FR'),
-      identifiedBy: 'Agent SAA Makosso (Badge N° 08)',
-      status: 'identifie',
+      identifiedBy: `${currentAgent.name} (${currentAgent.badgeNumber})`,
+      assignedAgentBadge: currentAgent.badgeNumber,
+      assignedAgentName: currentAgent.name,
+      status: 'convoque',
       filingFee: filing,
       penaltyFee: penalty,
       ratePerSqm: rate,
       totalDue: total,
       installmentsCount: newInstallmentsCount,
       paidAmount: 0,
-      nextDueDate: newInstallmentsCount > 1 ? newNextDueDate : 'Paiement Unique',
+      nextDueDate: convocationDateFR,
+      nextAppointmentType: 'BUREAU',
+      nextAppointmentTime: newConvocationTime,
+      convocationDate: convocationDateFR,
+      convocationTime: newConvocationTime,
+      convocationOffice: newConvocationOffice,
       paymentHistory: [],
       sanctions: [
         {
           type: 'CONVOCATION',
           issuedDate: new Date().toLocaleDateString('fr-FR'),
-          deadline: 'Sous 48h à la DDL-PN',
-          reason: 'Identification proactive terrain - régularisation obligatoire',
+          deadline: `Rendez-vous fixé manuellement au ${convocationDateFR} à ${newConvocationTime} au bureau SAA`,
+          appointmentTime: newConvocationTime,
+          appointmentOffice: newConvocationOffice,
+          reason: 'Identification proactive terrain - régularisation obligatoire et fixation des droits d\'exploitation',
           resolved: false,
         },
       ],
@@ -633,6 +702,8 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
     setEstablishments([newRecord, ...establishments]);
     setSelectedEst(newRecord);
     setShowNewModal(false);
+    // Afficher directement la convocation officielle générée
+    setActiveDocView({ type: 'CONVOCATION', est: newRecord });
     // Reset
     setNewEstName('');
     setNewPromoter('');
@@ -655,6 +726,11 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
     const newPaid = receiptEst.paidAmount + collectAmount;
     const receiptCode = `REC-DDL-PN-2026-${Math.floor(1000 + Math.random() * 9000)}`;
 
+    const isSettled = newPaid >= receiptEst.totalDue && receiptEst.totalDue > 0;
+    const firstDate = getFirstPaymentDate(receiptEst);
+    const renewalAnniversaryDate = addOneYear(firstDate);
+    const computedNextDueDate = isSettled ? renewalAnniversaryDate : nextDueDateInput;
+
     const newHistoryEntry = {
       id: receiptCode,
       date: new Date().toLocaleDateString('fr-FR') + ' ' + new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
@@ -662,17 +738,17 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
       collectedBy: collectLocation === 'TERRAIN' ? 'Agent SAA Terrain (Badge N° 08)' : 'Régisseur DDL-PN',
       location: collectLocation,
       receiptRef: receiptCode,
-      nextDueDate: nextDueDateInput,
+      nextDueDate: computedNextDueDate,
+      nextAppointmentType: isSettled ? undefined : collectNextRdvType,
+      nextAppointmentTime: isSettled ? undefined : collectNextTime,
     };
-
-    const isSettled = newPaid >= receiptEst.totalDue && receiptEst.totalDue > 0;
-    const firstDate = getFirstPaymentDate(receiptEst);
-    const renewalAnniversaryDate = addOneYear(firstDate);
 
     const updatedEst: FieldEstablishment = {
       ...receiptEst,
       paidAmount: newPaid,
-      nextDueDate: isSettled ? renewalAnniversaryDate : nextDueDateInput,
+      nextDueDate: computedNextDueDate,
+      nextAppointmentType: isSettled ? undefined : collectNextRdvType,
+      nextAppointmentTime: isSettled ? undefined : collectNextTime,
       status: isSettled
         ? 'autorise_dgl'
         : receiptEst.status === 'identifie' || receiptEst.status === 'convoque'
@@ -933,6 +1009,19 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
         <div className="flex flex-wrap items-center gap-2 mt-5 pt-4 border-t border-white/15">
           <button
             type="button"
+            onClick={() => setActiveSubTab('mode-mobile')}
+            className={`px-3.5 py-1.5 rounded font-sans text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+              activeSubTab === 'mode-mobile'
+                ? 'bg-[#ffe082] text-[#022448] shadow-md font-black ring-2 ring-white scale-102'
+                : 'bg-[#d97706] text-white hover:bg-[#b45309]'
+            }`}
+          >
+            <span className="material-symbols-outlined text-[16px]">smartphone</span>
+            <span>📱 Mode Tablette &amp; Mobile Agent</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveSubTab('agenda-rdv')}
             className={`px-3.5 py-1.5 rounded font-sans text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5 ${
               activeSubTab === 'agenda-rdv'
@@ -1035,7 +1124,66 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
             <span>Architecture &amp; Spécification</span>
           </button>
         </div>
+
+        {/* Bannière de session & Cloisonnement anti-doublon */}
+        <div className="mt-4 pt-3 border-t border-white/10 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-sm text-[#ffe082]">lock</span>
+            <span className="text-white/85">
+              {isAdmin ? (
+                <>
+                  <strong className="text-white">Session Super-Admin Direction :</strong> Supervision globale des {establishments.length} établissements et de tous les agents de terrain.
+                </>
+              ) : (
+                <>
+                  <strong className="text-white">Session Agent Cloisonnée :</strong> Connecté en tant que <strong className="text-[#ffe082]">{currentAgent.name} ({currentAgent.badgeNumber})</strong>. Données strictement isolées.
+                </>
+              )}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {isAdmin && (
+              <div className="flex items-center gap-1.5 bg-white/10 px-2.5 py-1 rounded-lg border border-white/20">
+                <span className="text-[10px] text-white/70 uppercase font-bold">Filtrer par agent :</span>
+                <select
+                  value={adminAgentFilter}
+                  onChange={(e) => setAdminAgentFilter(e.target.value)}
+                  className="bg-transparent text-white text-xs font-bold focus:outline-none cursor-pointer"
+                >
+                  <option value="TOUS" className="text-gray-900 bg-white">👥 Tous les agents</option>
+                  {agentsList
+                    .filter((a) => a.role === 'Agent de Terrain')
+                    .map((a) => (
+                      <option key={a.id} value={a.badgeNumber} className="text-gray-900 bg-white">
+                        {a.name} ({a.badgeNumber})
+                      </option>
+                    ))}
+                </select>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowLoginModal(true)}
+              className="bg-white/10 hover:bg-white/20 text-[#ffe082] px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors border border-white/20"
+              title="Changer d'agent ou saisir votre code PIN"
+            >
+              <span className="material-symbols-outlined text-sm">badge</span>
+              <span>Changer d'agent / Code PIN</span>
+            </button>
+          </div>
+        </div>
       </div>
+
+      {/* SUB-TAB: TERMINAL MOBILE & TABLETTE DES AGENTS DE TERRAIN */}
+      {activeSubTab === 'mode-mobile' && (
+        <TerminalAgentMobile
+          establishments={establishments}
+          onUpdateEstablishment={handleCalendarUpdateEstablishment}
+          onAddNewEstablishment={handleCalendarAddNewEstablishment}
+          agents={agents}
+        />
+      )}
 
       {/* SUB-TAB 0: AGENDA & RENDEZ-VOUS (STYLE GOOGLE CALENDAR) */}
       {activeSubTab === 'agenda-rdv' && (
@@ -2178,6 +2326,53 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
                 </div>
               </div>
 
+              {/* Fixation MANUELLE du délai et du RDV au bureau (Règle imposée par l'utilisateur) */}
+              <div className="p-3 bg-[#f0fdf4] rounded-xl border-2 border-[#16a34a] space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-[#065f46] text-xs uppercase flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-base">event_available</span>
+                    <span>Convocation au Bureau (Délai Fixé Manuellement) *</span>
+                  </span>
+                  <span className="text-[10px] bg-[#16a34a] text-white px-2 py-0.5 rounded font-black">
+                    MANUELLE
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-600 italic">
+                  L'agent fixe manuellement la date et l'heure limites de présentation au bureau.
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-700 mb-0.5">Date du Rendez-vous</label>
+                    <input
+                      type="date"
+                      required
+                      value={newConvocationDate}
+                      onChange={(e) => setNewConvocationDate(e.target.value)}
+                      className="w-full p-2 bg-white border border-[#16a34a] rounded-lg font-bold text-xs text-[#022448]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-700 mb-0.5">Heure du Rendez-vous</label>
+                    <input
+                      type="time"
+                      required
+                      value={newConvocationTime}
+                      onChange={(e) => setNewConvocationTime(e.target.value)}
+                      className="w-full p-2 bg-white border border-[#16a34a] rounded-lg font-bold text-xs text-[#022448]"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[10px] text-gray-600 font-bold mb-0.5">Bureau où se présenter</label>
+                  <input
+                    type="text"
+                    value={newConvocationOffice}
+                    onChange={(e) => setNewConvocationOffice(e.target.value)}
+                    className="w-full p-1.5 bg-white border border-gray-300 rounded text-[11px]"
+                  />
+                </div>
+              </div>
+
               <div className="pt-3 border-t border-[#dde2f3] flex items-center justify-end gap-2">
                 <button
                   type="button"
@@ -2232,7 +2427,41 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
               </div>
 
               <div>
-                <label className="font-bold text-[#161c27] block mb-1">Montant Perçu en Espèces (FCFA) *</label>
+                <label className="font-bold text-[#161c27] block mb-1">Modalité de Paiement</label>
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCollectPayMode('comptant');
+                      setCollectAmount(receiptEst.totalDue - receiptEst.paidAmount);
+                    }}
+                    className={`p-2 rounded-lg border font-bold text-xs cursor-pointer ${
+                      collectPayMode === 'comptant'
+                        ? 'bg-[#ecfdf5] border-[#10b981] text-[#065f46] ring-2 ring-[#a7f3d0]'
+                        : 'bg-white border-gray-200 text-gray-600'
+                    }`}
+                  >
+                    AU COMPTANT (Soldé)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCollectPayMode('acompte');
+                      setCollectAmount(Math.min(50000, receiptEst.totalDue - receiptEst.paidAmount));
+                    }}
+                    className={`p-2 rounded-lg border font-bold text-xs cursor-pointer ${
+                      collectPayMode === 'acompte'
+                        ? 'bg-[#fffbeb] border-[#f59e0b] text-[#b45309] ring-2 ring-[#fde68a]'
+                        : 'bg-white border-gray-200 text-gray-600'
+                    }`}
+                  >
+                    PAR ACOMPTE (Tranche)
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="font-bold text-[#161c27] block mb-1">Montant Perçu ce Jour (FCFA) *</label>
                 <input
                   type="number"
                   required
@@ -2263,30 +2492,93 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
                       name="loc"
                       value="DIRECTION"
                       checked={collectLocation === 'DIRECTION'}
+                      onChange={() => setCollectLocation('DIRECTION')}
                     />
                     <span className="font-semibold text-[#161c27]">Guichet Central Direction</span>
                   </label>
                 </div>
               </div>
 
-              {/* Obligatory Next Due Date */}
-              <div className="p-3 bg-[#fffbf7] rounded-lg border border-[#fed7aa]">
-                <label className="font-bold text-[#9a3412] block mb-1 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-[16px]">calendar_month</span>
-                  <span>Date de la Prochaine Échéance (Mention Obligatoire sur le Reçu) *</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ex: 15/04/2026"
-                  value={nextDueDateInput}
-                  onChange={(e) => setNextDueDateInput(e.target.value)}
-                  className="w-full p-2 border border-[#fed7aa] rounded bg-white text-xs font-bold text-[#9a3412]"
-                />
-                <span className="text-[10px] text-[#747783] block mt-1">
-                  Cette date sera imprimée sur le reçu remis à l'exploitant et déclenchera le rappel automatique.
-                </span>
-              </div>
+              {/* Si soldé : date anniversaire N+1 automatique */}
+              {receiptEst.paidAmount + collectAmount >= receiptEst.totalDue ? (
+                <div className="p-3 bg-[#ecfdf5] rounded-xl border-2 border-[#10b981] space-y-1">
+                  <span className="font-bold text-[#065f46] text-xs flex items-center gap-1">
+                    <span className="material-symbols-outlined text-base text-[#10b981]">celebration</span>
+                    <span>EXERCICE ANNUEL SOLDÉ À 100%</span>
+                  </span>
+                  <p className="text-[11px] text-gray-700">
+                    Prochaine taxe annuelle programmée automatiquement au :{' '}
+                    <strong className="text-[#006d2f] underline">
+                      {addOneYear(getFirstPaymentDate(receiptEst))}
+                    </strong>{' '}
+                    (date anniversaire du 1er versement).
+                  </p>
+                </div>
+              ) : (
+                /* Si acompte : choix de la modalité du prochain RDV + fixation manuelle */
+                <div className="p-3 bg-[#fffbf7] rounded-xl border-2 border-[#f59e0b] space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-[#9a3412] text-xs uppercase flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-[16px]">calendar_month</span>
+                      <span>Prochain Rendez-vous Convenu (Fixation Manuelle) *</span>
+                    </span>
+                    <span className="text-[9px] bg-[#f59e0b] text-white px-2 py-0.5 rounded font-black">
+                      MANUELLE
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setCollectNextRdvType('BUREAU')}
+                      className={`p-2 rounded-lg border font-bold text-left cursor-pointer ${
+                        collectNextRdvType === 'BUREAU'
+                          ? 'bg-white border-[#022448] text-[#022448] ring-1 ring-[#022448]'
+                          : 'bg-white/60 border-gray-200 text-gray-600'
+                      }`}
+                    >
+                      🏢 Le tenancier vient au bureau
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCollectNextRdvType('TERRAIN')}
+                      className={`p-2 rounded-lg border font-bold text-left cursor-pointer ${
+                        collectNextRdvType === 'TERRAIN'
+                          ? 'bg-white border-[#006d2f] text-[#006d2f] ring-1 ring-[#006d2f]'
+                          : 'bg-white/60 border-gray-200 text-gray-600'
+                      }`}
+                    >
+                      🚶 L'agent repasse sur place
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-700 mb-0.5">Date Convenus (JJ/MM/AAAA)</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Ex: 15/04/2026"
+                        value={nextDueDateInput}
+                        onChange={(e) => setNextDueDateInput(e.target.value)}
+                        className="w-full p-2 border border-[#fed7aa] rounded bg-white text-xs font-bold text-[#9a3412]"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-700 mb-0.5">Heure du Rendez-vous</label>
+                      <input
+                        type="time"
+                        value={collectNextTime}
+                        onChange={(e) => setCollectNextTime(e.target.value)}
+                        className="w-full p-2 border border-[#fed7aa] rounded bg-white text-xs font-bold text-[#9a3412]"
+                      />
+                    </div>
+                  </div>
+                  <span className="text-[10px] text-[#747783] block">
+                    Cette date sera imprimée sur le reçu remis à l'exploitant et le rappel sera programmé.
+                  </span>
+                </div>
+              )}
 
               <div className="pt-3 border-t border-[#dde2f3] flex items-center justify-end gap-2">
                 <button
@@ -2420,6 +2712,7 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
                   <p className="font-mono mt-1 text-[#747783]">
                     {activeDocView.type === 'FICHE_ENQUETE' && `RÉF : DDL-PN/SAA/ENQ-2026-${activeDocView.est.id.replace('EST-', '')}`}
                     {activeDocView.type === 'ORDRE_SERVICE' && 'RÉF : N° 028/MCAPNIT/DGL/DDL-PN'}
+                    {activeDocView.type === 'CONVOCATION' && `RÉF : CONV-DDL-PN-2026-${activeDocView.est.id.replace('EST-', '')}`}
                     {activeDocView.type === 'ATTESTATION' && `RÉF : DDL-PN/SAA/ATT-2026-${activeDocView.est.id.replace('EST-', '')}`}
                     {activeDocView.type === 'MISE_EN_DEMEURE' && `RÉF : DDL-PN/SAA/MED-2026-${activeDocView.est.id.replace('EST-', '')}`}
                   </p>
@@ -2445,12 +2738,14 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
                 <h3 className="font-garamond text-xl font-bold uppercase text-[#022448]">
                   {activeDocView.type === 'FICHE_ENQUETE' && "FICHE D'ENQUÊTE DE COMMODO & INCOMMODO / CONFORMITÉ TECHNIQUE"}
                   {activeDocView.type === 'ORDRE_SERVICE' && 'ORDRE DE SERVICE N° 028/MCAPNIT/DGL/DDL-PN'}
+                  {activeDocView.type === 'CONVOCATION' && "CONVOCATION OFFICIELLE À SE PRÉSENTER AU BUREAU"}
                   {activeDocView.type === 'ATTESTATION' && 'ATTESTATION PROVISOIRE DE DÉPÔT DE DOSSIER'}
                   {activeDocView.type === 'MISE_EN_DEMEURE' && 'MISE EN DEMEURE OFFICIELLE AVANT FERMETURE ADMINISTRATIVE'}
                 </h3>
                 <p className="text-[11px] font-sans italic text-[#747783]">
                   {activeDocView.type === 'FICHE_ENQUETE' && "Visite technique in situ préalable à l'homologation & perception des droits légaux"}
                   {activeDocView.type === 'ORDRE_SERVICE' && 'Mission départementale de recensement, contrôle et recouvrement forcé des loisirs'}
+                  {activeDocView.type === 'CONVOCATION' && "Notification sur le terrain • Délai et heure limites de présentation fixés manuellement"}
                   {activeDocView.type === 'ATTESTATION' && 'Valable pendant l’instruction préalable à la transmission à la Direction Générale (Brazzaville)'}
                   {activeDocView.type === 'MISE_EN_DEMEURE' && 'Délai légal de rigueur : 8 jours (ou 72h) à compter de la présente notification'}
                 </p>
@@ -2511,6 +2806,32 @@ export const ModuleTerrainRecouvrement: React.FC<ModuleTerrainRecouvrementProps>
                   <p>
                     <strong>ARTICLE 4 :</strong> Les forces de police et autorités municipales sont requises de prêter main-forte aux agents de la DDL-PN.
                   </p>
+                </div>
+              )}
+
+              {activeDocView.type === 'CONVOCATION' && (
+                <div className="space-y-3 font-serif text-[12px]">
+                  <p>Convocation officielle notifiée à l'exploitant sur le terrain :</p>
+                  <div className="p-3 bg-[#f0fdf4] border-l-4 border-[#16a34a] font-sans text-xs space-y-1">
+                    <p><strong>Établissement Convoqué : </strong> {activeDocView.est.name}</p>
+                    <p><strong>Promoteur / Tenancier : </strong> {activeDocView.est.promoter} &bull; Tél : {activeDocView.est.phone}</p>
+                    <p><strong>Activité &amp; Localisation : </strong> {activeDocView.est.activityLabel} — {activeDocView.est.district}</p>
+                    <div className="pt-2 mt-2 border-t border-[#bbf7d0] text-sm font-bold text-[#022448]">
+                      📅 Date et Heure fixées manuellement : <span className="text-[#16a34a] underline font-black">{activeDocView.est.nextDueDate}</span> {activeDocView.est.nextAppointmentTime ? `à ${activeDocView.est.nextAppointmentTime}` : ''}
+                    </div>
+                    <p className="text-[11px] text-gray-700">
+                      🏢 <strong>Lieu de Présentation :</strong> {activeDocView.est.convocationOffice || 'Service Autorisation & Animation (SAA) - Bureau N° 4, Direction Départementale des Loisirs, Avenue Moe Pratt, Pointe-Noire'}
+                    </p>
+                  </div>
+                  <p className="text-gray-800 leading-relaxed font-sans text-xs">
+                    <strong>OBJET :</strong> Identification sur le terrain, immatriculation au répertoire départemental et fixation/recouvrement des droits d'exploitation touristique.
+                  </p>
+                  <p className="text-gray-800 leading-relaxed font-sans text-[11px]">
+                    <strong>PIÈCES À PRODUIRE AU BUREAU :</strong> Pièce d'identité (CNI/Passeport), registre RCCM/NIU (si formel), titre d'occupation des lieux, justificatifs de versements antérieurs.
+                  </p>
+                  <div className="p-2.5 bg-[#fee2e2] rounded-lg border border-[#f87171] text-[#991b1b] text-[11px] font-sans font-bold">
+                    ⚠️ AVERTISSEMENT : En cas de non-présentation à la date et heure ci-dessus fixées d'autorité, il sera procédé à la fermeture administrative immédiate de l'établissement sous scellés.
+                  </div>
                 </div>
               )}
 

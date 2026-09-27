@@ -105,14 +105,43 @@
 }
 
 @media print {
-  header, footer, nav, .no-print, button, .tab-buttons {
+  @page {
+    size: A4 portrait;
+    margin: 10mm 12mm;
+  }
+  header, footer, nav, aside, .no-print, button, .tab-buttons, input[type="file"] {
     display: none !important;
   }
-  body {
+  html, body {
     background: white !important;
     color: black !important;
     padding: 0 !important;
     margin: 0 !important;
+    width: 100% !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  #root, .min-h-screen, .main-content-area, main, div {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    padding-top: 0 !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    margin-top: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+  }
+  .page-break-after {
+    page-break-after: always !important;
+    break-after: page !important;
+  }
+  .page-break-before {
+    page-break-before: always !important;
+    break-before: page !important;
+  }
+  .avoid-break {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
   }
   .print-area {
     box-shadow: none !important;
@@ -120,6 +149,6 @@
     width: 100% !important;
     max-width: 100% !important;
     margin: 0 !important;
-    padding: 15mm !important;
+    padding: 0 !important;
   }
 }

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { FieldEstablishment, AgentAccount } from '../lib/supabase.ts';
 import { ArmoiriesCongo, LogoDDLPN } from './RepublicSeal.tsx';
+import { useSession } from '../lib/sessionContext.tsx';
 
 interface CalendrierRdvTerrainProps {
   establishments: FieldEstablishment[];
@@ -167,6 +168,18 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
   onAddNewEstablishment,
   agents,
 }) => {
+  const {
+    currentAgent,
+    isAdmin,
+    isFieldAgent,
+    canAccessEstablishment,
+    canModifyEstablishment,
+    checkEstablishmentCollision,
+    reassignEstablishment,
+    setShowLoginModal,
+    agentsList,
+  } = useSession();
+
   // Current reference date: default to 24 September 2026 (matching system context)
   const [currentDate, setCurrentDate] = useState<Date>(() => {
     return new Date(2026, 8, 24);
@@ -175,10 +188,26 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
   const [viewMode, setViewMode] = useState<CalendarViewMode>('month');
   const [selectedDayISO, setSelectedDayISO] = useState<string>('2026-09-24');
 
-  // Filters
+  // Filters & Google Calendar Side Panel
   const [filterArrondissement, setFilterArrondissement] = useState<string>('TOUS');
   const [filterStatus, setFilterStatus] = useState<string>('TOUS');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [selectedAgentFilter, setSelectedAgentFilter] = useState<string>('TOUS');
+  const [showGoogleSidebar, setShowGoogleSidebar] = useState<boolean>(true);
+
+  // Manual Convocation & RDV fields
+  const [manualRdvTime, setManualRdvTime] = useState<string>('09:30');
+  const [manualRdvType, setManualRdvType] = useState<'BUREAU' | 'TERRAIN'>('BUREAU');
+  const [manualRdvOffice, setManualRdvOffice] = useState<string>(
+    'Service Autorisation & Animation (SAA) - Bureau N° 4, Direction Départementale des Loisirs, Avenue Moe Pratt'
+  );
+  const [collisionWarning, setCollisionWarning] = useState<{
+    hasCollision: boolean;
+    collisionReason?: string;
+    assignedToOther: boolean;
+    assignedAgentName?: string;
+    assignedAgentBadge?: string;
+  } | null>(null);
 
   // Modals
   const [quickPayEst, setQuickPayEst] = useState<FieldEstablishment | null>(null);
@@ -193,7 +222,7 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
   const [nextAppointmentDate, setNextAppointmentDate] = useState<string>('');
   const [payMethod, setPayMethod] = useState<string>('ESPECES');
   const [payLocation, setPayLocation] = useState<'TERRAIN' | 'DIRECTION'>('TERRAIN');
-  const [selectedAgentBadge, setSelectedAgentBadge] = useState<string>('SAA-PN-008');
+  const [selectedAgentBadge, setSelectedAgentBadge] = useState<string>(currentAgent.badgeNumber);
 
   // Reschedule form state
   const [rescheduleNewDate, setRescheduleNewDate] = useState<string>('');
@@ -231,6 +260,25 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
     const map = new Map<string, FieldEstablishment[]>();
 
     establishments.forEach((est) => {
+      // 🔒 Cloisonnement de session : un agent de terrain ne voit QUE ses établissements attribués !
+      if (isFieldAgent && !canAccessEstablishment(est)) {
+        return;
+      }
+
+      // 👁️ Vue Direction Centrale : l'administrateur peut filtrer par agent ou tout afficher
+      if (isAdmin && selectedAgentFilter !== 'TOUS') {
+        const assignedBadge =
+          est.assignedAgentBadge ||
+          (est.identifiedBy?.includes('008') || est.identifiedBy?.includes('Makosso')
+            ? 'SAA-PN-008'
+            : est.identifiedBy?.includes('005') || est.identifiedBy?.includes('Tchicaya')
+            ? 'SAA-PN-005'
+            : est.identifiedBy?.includes('012') || est.identifiedBy?.includes('Loubaki')
+            ? 'SAA-PN-012'
+            : 'SAA-CHEF-001');
+        if (assignedBadge !== selectedAgentFilter) return;
+      }
+
       // Filtering by district
       if (
         filterArrondissement !== 'TOUS' &&
@@ -282,7 +330,16 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
     });
 
     return map;
-  }, [establishments, filterArrondissement, filterStatus, searchQuery]);
+  }, [
+    establishments,
+    filterArrondissement,
+    filterStatus,
+    searchQuery,
+    isFieldAgent,
+    isAdmin,
+    selectedAgentFilter,
+    canAccessEstablishment,
+  ]);
 
   // List of all settled establishments whose annual fees are fully settled
   const settledEstablishments = useMemo(() => {
@@ -595,17 +652,21 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
     setShowNewRdvModal(true);
   };
 
-  // Filtered establishments for New RDV existing selection
+  // Filtered establishments for New RDV existing selection (cloisonné pour les agents)
   const filteredExistingEstablishments = useMemo(() => {
-    if (!newRdvSearchFilter.trim()) return establishments;
+    let list = establishments;
+    if (isFieldAgent) {
+      list = list.filter((e) => canAccessEstablishment(e));
+    }
+    if (!newRdvSearchFilter.trim()) return list;
     const q = newRdvSearchFilter.toLowerCase();
-    return establishments.filter(
+    return list.filter(
       (e) =>
         e.name.toLowerCase().includes(q) ||
         e.promoter.toLowerCase().includes(q) ||
         e.district.toLowerCase().includes(q)
     );
-  }, [establishments, newRdvSearchFilter]);
+  }, [establishments, newRdvSearchFilter, isFieldAgent, canAccessEstablishment]);
 
   const handleCreateNewRdv = (e: React.FormEvent) => {
     e.preventDefault();
@@ -620,16 +681,32 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
       const updated: FieldEstablishment = {
         ...target,
         nextDueDate: frDate,
+        nextAppointmentType: manualRdvType,
+        nextAppointmentTime: manualRdvTime,
       };
       onUpdateEstablishment(updated);
       setShowNewRdvModal(false);
       showBanner(
         'Rendez-vous Programmé',
-        `« ${target.name} » a été positionné au ${frDate} dans l'agenda de recouvrement terrain.`
+        `« ${target.name} » a été positionné au ${frDate} à ${manualRdvTime} (${manualRdvType === 'BUREAU' ? 'Convocation Bureau' : 'Visite Terrain'}).`
       );
     } else {
       if (!newEstName.trim()) {
         alert('Veuillez renseigner le nom de l’établissement.');
+        return;
+      }
+
+      // 🛡️ VÉRIFICATION STRICTE D'ANTI-COLLISION / ANTI-DOUBLON
+      const collision = checkEstablishmentCollision(
+        newEstName,
+        newEstPhone,
+        newEstDistrict,
+        establishments
+      );
+      if (collision.hasCollision && collision.assignedToOther) {
+        alert(
+          `⛔ DOUBLON STRICTEMENT INTERDIT :\n\nL'établissement « ${collision.existingEst?.name} » est DÉJÀ PRIS EN CHARGE par votre collègue ${collision.assignedAgentName} (${collision.assignedAgentBadge}) !\n\nPour préserver la coordination de la direction et éviter les doubles visites sur le terrain, vous ne pouvez pas créer ce dossier.`
+        );
         return;
       }
 
@@ -659,8 +736,10 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
         sector: newEstSector,
         surfaceSqm: 60,
         identifiedDate: frDate,
-        identifiedBy: 'Agent SAA DDL-PN',
-        status: 'identifie',
+        identifiedBy: `${currentAgent.name} (${currentAgent.badgeNumber})`,
+        assignedAgentBadge: currentAgent.badgeNumber,
+        assignedAgentName: currentAgent.name,
+        status: manualRdvType === 'BUREAU' ? 'convoque' : 'identifie',
         filingFee: newEstSector === 'formal' ? 30000 : 0,
         penaltyFee: newEstSector === 'formal' ? 0 : newEstNegotiatedAmount,
         ratePerSqm: 1200,
@@ -668,8 +747,27 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
         installmentsCount: 3,
         paidAmount: 0,
         nextDueDate: frDate,
+        nextAppointmentType: manualRdvType,
+        nextAppointmentTime: manualRdvTime,
+        convocationDate: frDate,
+        convocationTime: manualRdvTime,
+        convocationOffice: manualRdvOffice,
         paymentHistory: [],
-        sanctions: [],
+        sanctions:
+          manualRdvType === 'BUREAU'
+            ? [
+                {
+                  type: 'CONVOCATION',
+                  issuedDate: new Date().toLocaleDateString('fr-FR'),
+                  deadline: `Convocation fixée manuellement au ${frDate} à ${manualRdvTime}`,
+                  appointmentTime: manualRdvTime,
+                  appointmentOffice: manualRdvOffice,
+                  reason:
+                    'Convocation manuelle au bureau SAA pour régularisation des droits d’exploitation',
+                  resolved: false,
+                },
+              ]
+            : [],
       };
 
       if (onAddNewEstablishment) {
@@ -683,9 +781,10 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
       setNewEstName('');
       setNewEstPromoter('');
       setNewEstPhone('');
+      setCollisionWarning(null);
       showBanner(
         'Nouvel Établissement Enregistré',
-        `« ${newEst.name} » a été recensé sur le terrain et programmé pour le ${frDate}.`
+        `« ${newEst.name} » a été attribué à votre portefeuille (${currentAgent.name}) et programmé pour le ${frDate} à ${manualRdvTime}.`
       );
     }
   };
@@ -840,6 +939,38 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
 
         {/* Right: View Switchers + Filters + Add RDV */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Agent Filter (Admin) or Private Session Badge (Agent) */}
+          {isAdmin ? (
+            <div className="flex items-center gap-1.5 bg-[#f8faff] border border-[#dde2f3] rounded-lg px-2.5 py-1.5 shadow-2xs">
+              <span className="material-symbols-outlined text-sm text-[#006d2f]">group</span>
+              <span className="text-[10px] font-bold text-gray-500 uppercase">Vue :</span>
+              <select
+                value={selectedAgentFilter}
+                onChange={(e) => setSelectedAgentFilter(e.target.value)}
+                className="text-xs bg-transparent font-bold text-[#022448] focus:outline-none cursor-pointer"
+              >
+                <option value="TOUS">👥 Tous les agents (Vue Direction)</option>
+                {agentsList
+                  .filter((a) => a.role === 'Agent de Terrain')
+                  .map((a) => (
+                    <option key={a.id} value={a.badgeNumber}>
+                      {a.name} ({a.badgeNumber})
+                    </option>
+                  ))}
+              </select>
+            </div>
+          ) : (
+            <div
+              onClick={() => setShowLoginModal(true)}
+              className="flex items-center gap-1.5 bg-emerald-50 text-emerald-800 border border-emerald-300 rounded-lg px-2.5 py-1.5 text-xs font-bold cursor-pointer hover:bg-emerald-100 shadow-2xs"
+              title="Votre session est strictement cloisonnée à vos établissements attribués (Cliquez pour changer d'agent ou entrer votre code PIN)"
+            >
+              <span className="material-symbols-outlined text-sm text-emerald-600">lock</span>
+              <span>Mon Portefeuille : {currentAgent.name}</span>
+              <span className="text-[10px] text-emerald-600 font-mono">({currentAgent.badgeNumber})</span>
+            </div>
+          )}
+
           {/* View Mode Toggle (Google Calendar Style) */}
           <div className="inline-flex bg-[#f1f3ff] p-0.5 rounded-xl border border-[#dde2f3]">
             <button
@@ -915,10 +1046,10 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
             title="Ouvrir le registre des établissements ayant soldé et la date de renouvellement"
           >
             <span className="material-symbols-outlined text-[15px]">verified</span>
-            <span>Répertoire Soldés ({settledEstablishments.length})</span>
+            <span>Soldés ({settledEstablishments.length})</span>
           </button>
 
-          {/* Quick Add Button */}
+          {/* Quick Add Button Google style */}
           <button
             type="button"
             onClick={() => openNewRdvModal(selectedDayISO)}
@@ -926,13 +1057,156 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
             title="Cliquer pour enregistrer un établissement ou planifier un acompte sur la date sélectionnée"
           >
             <span className="material-symbols-outlined text-base">add_circle</span>
-            <span>+ Enregistrer / Programmer</span>
+            <span>+ Nouveau Rendez-vous</span>
           </button>
         </div>
       </div>
 
-      {/* Main View Area: Month or Week or Day */}
-      <div className="grid grid-cols-1 xl:grid-cols-4 gap-4">
+      {/* Main View Area: Side by Side with Google Calendar Sidebar */}
+      <div className="flex flex-col lg:flex-row gap-4 items-start">
+        {/* Google Calendar Left Sidebar (Mini-Calendar + Portefeuilles) */}
+        {showGoogleSidebar && (
+          <div className="w-full lg:w-64 bg-white rounded-2xl border border-[#dde2f3] shadow-sm p-4 space-y-4 shrink-0">
+            {/* Big Google "+ Créer" style button */}
+            <button
+              type="button"
+              onClick={() => openNewRdvModal(selectedDayISO)}
+              className="w-full py-2.5 px-4 rounded-full bg-white hover:bg-slate-50 border border-gray-200 shadow-md hover:shadow-lg transition-all flex items-center gap-3 cursor-pointer group"
+            >
+              <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-amber-400 via-emerald-500 to-blue-500 flex items-center justify-center text-white shadow-xs group-hover:rotate-90 transition-transform">
+                <span className="material-symbols-outlined text-lg">add</span>
+              </div>
+              <span className="font-bold text-xs text-gray-800 tracking-wide uppercase">
+                + Nouveau Rendez-vous
+              </span>
+            </button>
+
+            {/* Interactive Mini-Month Datepicker */}
+            <div className="border border-gray-100 rounded-xl p-2.5 bg-slate-50/60">
+              <div className="flex items-center justify-between text-xs font-bold text-gray-800 mb-2 px-1">
+                <span className="capitalize">{monthName}</span>
+                <div className="flex items-center gap-1 text-gray-600">
+                  <button type="button" onClick={handlePrev} className="p-0.5 hover:bg-white rounded">
+                    <span className="material-symbols-outlined text-sm">chevron_left</span>
+                  </button>
+                  <button type="button" onClick={handleNext} className="p-0.5 hover:bg-white rounded">
+                    <span className="material-symbols-outlined text-sm">chevron_right</span>
+                  </button>
+                </div>
+              </div>
+              <div className="grid grid-cols-7 text-center text-[10px] font-bold text-gray-400 mb-1">
+                <span>L</span><span>M</span><span>M</span><span>J</span><span>V</span><span>S</span><span>D</span>
+              </div>
+              <div className="grid grid-cols-7 text-center gap-y-1 text-xs">
+                {calendarDays.slice(0, 35).map((d) => {
+                  const hasEvents = (eventsByDate.get(d.iso) || []).length > 0;
+                  const isSel = d.iso === selectedDayISO;
+                  return (
+                    <button
+                      key={d.iso}
+                      type="button"
+                      onClick={() => handleDayClick(d.iso)}
+                      className={`w-6 h-6 mx-auto rounded-full flex flex-col items-center justify-center text-[11px] font-semibold transition-all relative ${
+                        isSel
+                          ? 'bg-[#006d2f] text-white font-bold'
+                          : d.isToday
+                          ? 'bg-[#022448] text-white font-bold'
+                          : d.isCurrentMonth
+                          ? 'text-gray-700 hover:bg-gray-200'
+                          : 'text-gray-300'
+                      }`}
+                    >
+                      <span>{d.dayNumber}</span>
+                      {hasEvents && !isSel && (
+                        <span className="w-1 h-1 rounded-full bg-[#006d2f] absolute bottom-0.5" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Catégories & Types d'Agenda */}
+            <div className="space-y-2 pt-2 border-t border-gray-100">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                Types de rendez-vous
+              </div>
+              <div className="space-y-1.5 text-xs text-gray-700">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#10b981] shrink-0" />
+                  <span className="truncate">🏢 Convocation Bureau (Manuel)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#0284c7] shrink-0" />
+                  <span className="truncate">📍 Visite Terrain Recouvrement</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#8b5cf6] shrink-0" />
+                  <span className="truncate">🔄 Soldé (Anniversaire +1 an)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#ef4444] shrink-0" />
+                  <span className="truncate">⚠️ Relance / Retard</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Portefeuilles Agents (Admin) ou Isolation (Agent) */}
+            <div className="space-y-2 pt-2 border-t border-gray-100">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                {isAdmin ? 'Agents de Terrain DDL-PN' : 'Mon Portefeuille Exclusif'}
+              </div>
+              {isAdmin ? (
+                <div className="space-y-1 text-xs">
+                  {agentsList.map((ag) => (
+                    <button
+                      key={ag.id}
+                      type="button"
+                      onClick={() =>
+                        setSelectedAgentFilter(
+                          selectedAgentFilter === ag.badgeNumber ? 'TOUS' : ag.badgeNumber
+                        )
+                      }
+                      className={`w-full flex items-center justify-between p-1.5 rounded-lg cursor-pointer transition-colors text-left ${
+                        selectedAgentFilter === ag.badgeNumber
+                          ? 'bg-emerald-50 text-emerald-900 font-bold border border-emerald-300'
+                          : 'hover:bg-gray-100 text-gray-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span
+                          className="w-2.5 h-2.5 rounded-full shrink-0"
+                          style={{ backgroundColor: ag.color || '#004528' }}
+                        />
+                        <span className="truncate text-[11px]">{ag.name.split(' ')[0]} {ag.name.split(' ')[1] || ''}</span>
+                      </div>
+                      <span className="text-[9px] font-mono text-gray-400">{ag.badgeNumber.replace('SAA-', '')}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl text-xs text-emerald-900 space-y-1">
+                  <div className="font-bold flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-emerald-600">lock</span>
+                    <span>Session Isolée & Sécurisée</span>
+                  </div>
+                  <p className="text-[11px] text-emerald-700 leading-tight">
+                    Vos collègues ne peuvent pas consulter vos dossiers.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Anti-collision shield badge */}
+            <div className="pt-2 border-t border-gray-100 text-[10px] text-gray-500 flex items-center gap-1.5">
+              <span className="material-symbols-outlined text-xs text-[#006d2f]">shield</span>
+              <span>Base Unique Supabase • Anti-doublon</span>
+            </div>
+          </div>
+        )}
+
+        {/* Main View Area: Month or Week or Day */}
+        <div className="flex-1 w-full min-w-0 grid grid-cols-1 xl:grid-cols-4 gap-4">
         {/* Left Column (3 cols): Calendar Grid or Week Timeline */}
         <div className="xl:col-span-3 bg-white rounded-2xl border border-[#dde2f3] shadow-sm overflow-hidden flex flex-col">
           {/* SEARCH BAR & SUMMARY */}
@@ -1422,6 +1696,7 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
           </button>
         </div>
       </div>
+      </div>
 
       {/* ========================================================================= */}
       {/* MODAL 1: ENCAISSER UN ACOMPTE ET CHOISIR DATE DU PROCHAIN RENDEZ-VOUS     */}
@@ -1859,8 +2134,13 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
                       required
                       placeholder="ex: Espace Culturel Le Makélékélé"
                       value={newEstName}
-                      onChange={(e) => setNewEstName(e.target.value)}
-                      className="w-full p-2 text-xs bg-white border border-[#dde2f3] rounded-xl"
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setNewEstName(val);
+                        const col = checkEstablishmentCollision(val, newEstPhone, newEstDistrict, establishments);
+                        setCollisionWarning(col.hasCollision ? col : null);
+                      }}
+                      className="w-full p-2 text-xs bg-white border border-[#dde2f3] rounded-xl focus:ring-2 focus:ring-[#006d2f]"
                     />
                   </div>
 
@@ -1885,11 +2165,33 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
                         type="text"
                         placeholder="+242 06..."
                         value={newEstPhone}
-                        onChange={(e) => setNewEstPhone(e.target.value)}
-                        className="w-full p-2 text-xs bg-white border border-[#dde2f3] rounded-xl"
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setNewEstPhone(val);
+                          const col = checkEstablishmentCollision(newEstName, val, newEstDistrict, establishments);
+                          setCollisionWarning(col.hasCollision ? col : null);
+                        }}
+                        className="w-full p-2 text-xs bg-white border border-[#dde2f3] rounded-xl focus:ring-2 focus:ring-[#006d2f]"
                       />
                     </div>
                   </div>
+
+                  {/* 🛡️ Alerte Anti-Collision en direct */}
+                  {collisionWarning && collisionWarning.hasCollision && (
+                    <div className="p-3 bg-red-50 border-2 border-red-400 rounded-xl text-xs text-red-900 shadow-sm animate-pulse">
+                      <div className="flex items-center gap-1.5 font-bold text-red-800">
+                        <span className="material-symbols-outlined text-base text-red-600">shield</span>
+                        <span>DOUBLON DÉTECTÉ : Établissement déjà pris en charge !</span>
+                      </div>
+                      <p className="mt-1 text-[11px] text-red-700">{collisionWarning.collisionReason}</p>
+                      <div className="mt-1.5 font-semibold text-[11px] bg-red-100/80 px-2 py-1 rounded border border-red-200">
+                        Agent en charge : <span className="font-bold text-red-900">{collisionWarning.assignedAgentName}</span> ({collisionWarning.assignedAgentBadge})
+                      </div>
+                      <p className="text-[10px] text-red-600 font-bold mt-1">
+                        ⛔ Pour éviter tout double contact sur le terrain, vous ne devez pas créer ce dossier.
+                      </p>
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-2 gap-2">
                     <div>
@@ -1936,13 +2238,58 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
                         onChange={(e) => setNewEstNegotiatedAmount(Number(e.target.value))}
                         className="w-full p-2 text-xs font-bold bg-white border border-[#dde2f3] rounded-xl"
                       />
-                      <span className="text-[10px] text-gray-500">
-                        Piste informelle : montant négocié librement sans motif obligatoire.
-                      </span>
                     </div>
                   )}
                 </div>
               )}
+
+              {/* SECTION CONVOCATION MANUELLE ET MODALITÉS DU RENDEZ-VOUS */}
+              <div className="bg-[#f8faff] p-3.5 rounded-xl border border-[#dde2f3] space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-[#022448] flex items-center gap-1.5 uppercase tracking-wider">
+                    <span className="material-symbols-outlined text-[#006d2f] text-base">schedule</span>
+                    Délai &amp; Heure fixés manuellement
+                  </span>
+                  <span className="text-[10px] bg-[#dcfce7] text-[#065f46] font-bold px-2 py-0.5 rounded">
+                    Manuel 100%
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Modalité du Rdv</label>
+                    <select
+                      value={manualRdvType}
+                      onChange={(e) => setManualRdvType(e.target.value as 'BUREAU' | 'TERRAIN')}
+                      className="w-full p-2 bg-white border border-gray-300 rounded-lg text-xs font-bold text-[#022448]"
+                    >
+                      <option value="BUREAU">🏢 Convocation au Bureau SAA</option>
+                      <option value="TERRAIN">📍 Visite de Terrain (Recouvrement)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Heure Convenue</label>
+                    <input
+                      type="time"
+                      value={manualRdvTime}
+                      onChange={(e) => setManualRdvTime(e.target.value)}
+                      className="w-full p-2 bg-white border border-gray-300 rounded-lg text-xs font-bold font-mono text-[#022448]"
+                    />
+                  </div>
+                </div>
+
+                {manualRdvType === 'BUREAU' && (
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Bureau &amp; Lieu de Convocation</label>
+                    <input
+                      type="text"
+                      value={manualRdvOffice}
+                      onChange={(e) => setManualRdvOffice(e.target.value)}
+                      className="w-full p-2 bg-white border border-gray-300 rounded-lg text-xs text-gray-700 font-medium"
+                    />
+                  </div>
+                )}
+              </div>
 
               <div className="pt-3 flex items-center justify-end gap-2 border-t border-[#dde2f3]">
                 <button
@@ -1954,7 +2301,12 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="bg-[#006d2f] text-white text-xs font-bold px-4 py-2 rounded-xl shadow cursor-pointer flex items-center gap-1"
+                  disabled={collisionWarning?.hasCollision && collisionWarning?.assignedToOther}
+                  className={`text-white text-xs font-bold px-4 py-2 rounded-xl shadow cursor-pointer flex items-center gap-1 transition-all ${
+                    collisionWarning?.hasCollision && collisionWarning?.assignedToOther
+                      ? 'bg-gray-400 cursor-not-allowed opacity-60'
+                      : 'bg-[#006d2f] hover:bg-[#005524]'
+                  }`}
                 >
                   <span className="material-symbols-outlined text-sm">event</span>
                   <span>Confirmer la Programmation</span>

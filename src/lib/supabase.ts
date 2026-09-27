@@ -62,6 +62,14 @@ export interface FieldEstablishment {
   installmentsCount: 1 | 2 | 3 | 4;
   paidAmount: number;
   nextDueDate: string;
+  nextAppointmentType?: 'BUREAU' | 'TERRAIN';
+  nextAppointmentTime?: string;
+  convocationDate?: string;
+  convocationTime?: string;
+  convocationOffice?: string;
+  assignedAgentBadge?: string;
+  assignedAgentName?: string;
+  assignedAgentId?: string;
   paymentHistory: {
     id: string;
     date: string;
@@ -70,11 +78,15 @@ export interface FieldEstablishment {
     location: 'TERRAIN' | 'DIRECTION';
     receiptRef: string;
     nextDueDate: string;
+    nextAppointmentType?: 'BUREAU' | 'TERRAIN';
+    nextAppointmentTime?: string;
   }[];
   sanctions: {
     type: 'CONVOCATION' | 'MISE_EN_DEMEURE' | 'FERMETURE';
     issuedDate: string;
     deadline: string;
+    appointmentTime?: string;
+    appointmentOffice?: string;
     reason: string;
     resolved: boolean;
   }[];
@@ -115,6 +127,8 @@ export interface AgentAccount {
   username?: string;
   pinCode?: string;
   deviceStatus?: 'Sécurisé (BYOD)' | 'Révoqué à distance' | 'Non appairé';
+  zone?: string;
+  color?: string;
 }
 
 // Activity type mapping from backend DB enum to friendly label

@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
+import type { TabType } from './Navbar.tsx';
 
-export const SuiviPTA: React.FC = () => {
+interface SuiviPTAProps {
+  onNavigateToTab?: (tab: TabType) => void;
+}
+
+export const SuiviPTA: React.FC<SuiviPTAProps> = ({ onNavigateToTab }) => {
   const [isCompiling, setIsCompiling] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -11,10 +16,13 @@ export const SuiviPTA: React.FC = () => {
       setToastMessage(
         'Rapport Trimestriel T3-2026 officiel compilé avec visas I à IX et contraintes logistiques intégrées.'
       );
+      if (onNavigateToTab) {
+        onNavigateToTab('rapport-trimestriel');
+      }
       setTimeout(() => {
         setToastMessage(null);
       }, 4500);
-    }, 1200);
+    }, 800);
   };
 
   return (
