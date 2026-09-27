@@ -507,7 +507,7 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
     if (!quickPayEst) return;
 
     if (payAmount <= 0) {
-      alert('Veuillez saisir un montant perçu supérieur à 0 FCFA.');
+      showBanner('Montant invalide', 'Veuillez saisir un montant perçu supérieur à 0 FCFA.');
       return;
     }
 
@@ -539,7 +539,7 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
     } else {
       // Not settled yet: agent selected next appointment date
       if (!nextAppointmentDate) {
-        alert('Veuillez sélectionner la date du prochain rendez-vous / acompte.');
+        showBanner('Date requise', 'Veuillez sélectionner la date du prochain rendez-vous / acompte.');
         return;
       }
       computedNextDueDate = formatISOToFR(nextAppointmentDate);
@@ -675,7 +675,7 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
     if (newRdvMode === 'existing') {
       const target = establishments.find((item) => item.id === selectedExistingEstId);
       if (!target) {
-        alert('Veuillez sélectionner un établissement dans la liste.');
+        showBanner('Sélection requise', 'Veuillez sélectionner un établissement dans la liste.');
         return;
       }
       const updated: FieldEstablishment = {
@@ -692,7 +692,7 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
       );
     } else {
       if (!newEstName.trim()) {
-        alert('Veuillez renseigner le nom de l’établissement.');
+        showBanner('Nom requis', 'Veuillez renseigner le nom de l’établissement.');
         return;
       }
 
@@ -704,8 +704,9 @@ export const CalendrierRdvTerrain: React.FC<CalendrierRdvTerrainProps> = ({
         establishments
       );
       if (collision.hasCollision && collision.assignedToOther) {
-        alert(
-          `⛔ DOUBLON STRICTEMENT INTERDIT :\n\nL'établissement « ${collision.existingEst?.name} » est DÉJÀ PRIS EN CHARGE par votre collègue ${collision.assignedAgentName} (${collision.assignedAgentBadge}) !\n\nPour préserver la coordination de la direction et éviter les doubles visites sur le terrain, vous ne pouvez pas créer ce dossier.`
+        showBanner(
+          '⛔ DOUBLON STRICTEMENT INTERDIT',
+          `L'établissement « ${collision.existingEst?.name} » est DÉJÀ PRIS EN CHARGE par votre collègue ${collision.assignedAgentName} (${collision.assignedAgentBadge}) ! Pour préserver la coordination de la direction et éviter les doubles visites sur le terrain, vous ne pouvez pas créer ce dossier.`
         );
         return;
       }

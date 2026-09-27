@@ -190,10 +190,10 @@ export const RapportTrimestriel: React.FC = () => {
           setData(parsed);
           showToast('Rapport importé avec succès.');
         } else {
-          alert('Fichier JSON incompatible avec le prototype officiel des 4 services.');
+          showToast('Fichier JSON incompatible avec le prototype officiel des 4 services.');
         }
       } catch {
-        alert('Erreur lors de la lecture du fichier JSON.');
+        showToast('Erreur lors de la lecture du fichier JSON.');
       }
     };
     reader.readAsText(file);
